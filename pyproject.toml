@@ -1,0 +1,54 @@
+[project]
+name = "ebdb"
+version = "0.1.0"
+description = "CLI tool to index EPUB metadata into a SQLite database"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "loguru>=0.7",
+    "rich>=13.0",
+    "ebooklib>=0.18",
+    "beautifulsoup4>=4.12",
+    "platformdirs>=4.0",
+]
+
+[tool.poe.tasks]
+lint = "ruff check ."
+format = "ruff format ."
+typecheck = "ty check"
+test = "pytest"
+markdown = "flowmark plans/*.md"
+qa.sequence = ["lint", "typecheck", "test"]
+qa.ignore_fail = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.4",
+    "pytest>=8.0",
+    "poethepoet>=0.26",
+    "ty>=0.0.40",
+    "flowmark-rs>=0.3",
+]
+
+[project.scripts]
+ebdb = "ebdb.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "C4"]
+ignore = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["ebdb"]
