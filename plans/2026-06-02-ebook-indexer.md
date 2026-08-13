@@ -21,11 +21,11 @@
 
 **Files:**
 - Create: `pyproject.toml`
-- Create: `src/ebdb/__init__.py`
-- Create: `src/ebdb/cli.py`
+- Create: `src/ebdx/__init__.py`
+- Create: `src/ebdx/cli.py`
 
 **Step 1: Initialize uv project**
-Run: `uv init --lib ebdb`
+Run: `uv init --lib ebdx`
 
 **Step 2: Configure pyproject.toml**
 Update `pyproject.toml` with dependencies (`click`, `loguru`, `rich`, `ebooklib`, `beautifulsoup4`, `platformdirs`), dev tools (`poethepoet`, `ruff`, `ty`, `pytest`, `flowmark-rs`), and a `poe` task runner.
@@ -37,7 +37,7 @@ Update `pyproject.toml` with dependencies (`click`, `loguru`, `rich`, `ebooklib`
 **Objective:** Implement a Click CLI with `discover`, `index`, and `search` stubs.
 
 **Files:**
-- Modify: `src/ebdb/cli.py`
+- Modify: `src/ebdx/cli.py`
 
 **Step 1: Implement Click entry point**
 ```python
@@ -67,7 +67,7 @@ def search(query):
 **Objective:** Set up SQLite database with FTS5.
 
 **Files:**
-- Create: `src/ebdb/db.py`
+- Create: `src/ebdx/db.py`
 
 ---
 
@@ -76,7 +76,7 @@ def search(query):
 **Objective:** Implement metadata extraction from `.epub` files.
 
 **Files:**
-- Create: `src/ebdb/extractor.py`
+- Create: `src/ebdx/extractor.py`
 
 ---
 
@@ -85,8 +85,8 @@ def search(query):
 **Objective:** Walk the directory, extract metadata, and save to the database.
 
 **Files:**
-- Create: `src/ebdb/scanner.py`
-- Modify: `src/ebdb/cli.py`
+- Create: `src/ebdx/scanner.py`
+- Modify: `src/ebdx/cli.py`
 
 ---
 
@@ -95,5 +95,5 @@ def search(query):
 **Objective:** Implement full-text search querying.
 
 **Files:**
-- Modify: `src/ebdb/db.py`
-- Modify: `src/ebdb/cli.py`
+- Modify: `src/ebdx/db.py`
+- Modify: `src/ebdx/cli.py`

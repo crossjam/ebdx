@@ -1,5 +1,5 @@
 [project]
-name = "ebdb"
+name = "ebdx"
 version = "0.1.0"
 description = "CLI tool to index EPUB metadata into a SQLite database"
 readme = "README.md"
@@ -14,13 +14,52 @@ dependencies = [
 ]
 
 [tool.poe.tasks]
-lint = "ruff check ."
-format = "ruff format ."
-typecheck = "ty check"
-test = "pytest"
-markdown = "flowmark plans/*.md"
-qa.sequence = ["lint", "typecheck", "test"]
-qa.ignore_fail = false
+# Linting
+[tool.poe.tasks.lint]
+help = "Run ruff linter on source and test files"
+cmd = "ruff check src/ tests/"
+
+[tool.poe.tasks."lint:fix"]
+help = "Run ruff linter and auto-fix issues"
+cmd = "ruff check --fix src/ tests/"
+
+# Formatting
+[tool.poe.tasks.format]
+help = "Format source and test files with ruff"
+cmd = "ruff format src/ tests/"
+
+[tool.poe.tasks."format:check"]
+help = "Check formatting without modifying files"
+cmd = "ruff format --check src/ tests/"
+
+# Type checking
+[tool.poe.tasks.type]
+help = "Run ty type checker on source files"
+cmd = "ty check src/"
+
+# Testing
+[tool.poe.tasks.test]
+help = "Run pytest with verbose output"
+cmd = "pytest -v"
+
+[tool.poe.tasks."test:cov"]
+help = "Run pytest with coverage report (terminal + HTML)"
+cmd = "pytest --cov=ebdx --cov-report=term-missing --cov-report=html"
+
+[tool.poe.tasks."test:quick"]
+help = "Run pytest and stop on first failure"
+cmd = "pytest -x"
+
+# Documentation
+[tool.poe.tasks.markdown]
+help = "Process markdown files with flowmark"
+cmd = "flowmark plans/*.md"
+
+# Combined QA - run all checks
+[tool.poe.tasks.qa]
+help = "Run all QA checks (lint, type, test)"
+sequence = ["lint", "type", "test"]
+ignore_fail = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -30,13 +69,24 @@ python_files = "test_*.py"
 dev = [
     "ruff>=0.4",
     "pytest>=8.0",
+    "pytest-cov>=4.0.0",
     "poethepoet>=0.26",
     "ty>=0.0.40",
     "flowmark-rs>=0.3",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "poethepoet>=0.26",
+    "ruff>=0.4",
+    "ty>=0.0.40",
+    "flowmark-rs>=0.3",
+    "pytest-cov>=4.0.0",
+]
+
 [project.scripts]
-ebdb = "ebdb.cli:main"
+ebdx = "ebdx.cli:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -51,4 +101,4 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "C4"]
 ignore = []
 
 [tool.ruff.lint.isort]
-known-first-party = ["ebdb"]
+known-first-party = ["ebdx"]
