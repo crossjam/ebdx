@@ -5,15 +5,15 @@ Walks directories to find EPUB files and extracts their metadata
 for indexing into the database.
 """
 
-import sqlite3
 from pathlib import Path
 
+import sqlite_utils
 from rich.console import Console
 
 
 def scan_and_index(
     root: Path,
-    db: sqlite3.Connection,
+    db: sqlite_utils.Database,
     console: Console | None = None,
 ) -> dict:
     """Scan a directory for EPUBs, extract metadata, and index into the database.

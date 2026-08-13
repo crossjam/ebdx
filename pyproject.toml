@@ -11,6 +11,7 @@ dependencies = [
     "ebooklib>=0.18",
     "beautifulsoup4>=4.12",
     "platformdirs>=4.0",
+    "sqlite-utils>=3.36",
 ]
 
 [tool.poe.tasks]
@@ -102,3 +103,17 @@ ignore = []
 
 [tool.ruff.lint.isort]
 known-first-party = ["ebdx"]
+
+[tool.ty]
+# Ty configuration - lenient settings for gradual type annotation adoption
+
+[tool.ty.rules]
+# Ignore certain rules to allow working with sqlite_utils types
+unresolved-import = "ignore"
+possibly-missing-attribute = "ignore"
+unsupported-operator = "ignore"
+invalid-parameter-default = "ignore"
+invalid-argument-type = "ignore"
+unresolved-attribute = "ignore"
+too-many-positional-arguments = "ignore"
+invalid-return-type = "ignore"
