@@ -6,7 +6,7 @@ from platformdirs import user_data_dir
 from rich.console import Console
 from rich.table import Table
 
-APP_NAME = "ebdb"
+APP_NAME = "ebdx"
 APP_AUTHOR = "crossjam"
 
 
@@ -18,7 +18,7 @@ def get_data_dir():
 
 @click.group()
 def cli():
-    """ebdb - eBook Database tool."""
+    """ebdx - eBook Database tool."""
     pass
 
 
