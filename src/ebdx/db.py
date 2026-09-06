@@ -22,11 +22,30 @@ class InvalidQueryError(ValueError):
     leaking a traceback.
     """
 
+
+# SQLite reports both a malformed FTS5 query and unrelated faults (a locked
+# database, a missing or corrupt FTS table) as ``sqlite3.OperationalError``.
+# These substrings mark the query-parser failures, which are the user's to
+# fix; anything else is a real database error and must propagate unchanged.
+_FTS_QUERY_ERROR_MARKERS = (
+    "fts5: ",
+    "unterminated string",
+    "unrecognized token",
+    "unknown special query",
+    "no such column",
+)
+
 # Bumped whenever the on-disk layout changes incompatibly. Stored in the
 # database's ``PRAGMA user_version``; a file below this (with data) is rebuilt.
 SCHEMA_VERSION = 1
 
 _FTS_TRIGGERS = ("books_ai", "books_ad", "books_au")
+
+
+def _is_fts_query_error(exc: sqlite3.OperationalError) -> bool:
+    """True when ``exc`` is FTS5 rejecting the query text, not a database fault."""
+    message = str(exc).lower()
+    return any(marker in message for marker in _FTS_QUERY_ERROR_MARKERS)
 
 
 def get_database(db_path: str | Path) -> "Database":
@@ -274,7 +293,9 @@ def search_books(db: "Database", query: str, limit: int | None = None) -> list[d
     except sqlite3.OperationalError as e:
         # A malformed FTS5 query (unbalanced quotes, a bare operator) surfaces
         # here as an OperationalError; re-raise as a typed error the CLI can
-        # report cleanly.
+        # report cleanly. Unrelated operational failures propagate unchanged.
+        if not _is_fts_query_error(e):
+            raise
         raise InvalidQueryError(str(e)) from e
 
     books = []

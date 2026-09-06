@@ -15,7 +15,13 @@ import sqlite3
 import pytest
 import sqlite_utils
 
-from ebdx.db import SCHEMA_VERSION, get_database, save_book, search_books
+from ebdx.db import (
+    SCHEMA_VERSION,
+    InvalidQueryError,
+    get_database,
+    save_book,
+    search_books,
+)
 
 
 def _book(**overrides):
@@ -231,3 +237,24 @@ def test_search_results_carry_the_source_path(tmp_path):
     (hit,) = search_books(db, "Dune")
 
     assert hit["path"] == "/library/dune.epub"
+
+
+@pytest.mark.parametrize("bad_query", ['"unbalanced', "AND", "NEAR(", "a OR OR b"])
+def test_malformed_query_raises_invalid_query_error(tmp_path, bad_query):
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+
+    with pytest.raises(InvalidQueryError):
+        search_books(db, bad_query)
+
+
+def test_unrelated_operational_error_is_not_masked_as_a_bad_query(tmp_path):
+    """A missing FTS table is a database fault, not the user's query."""
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+    db.execute("DROP TABLE books_fts")
+
+    with pytest.raises(sqlite3.OperationalError) as excinfo:
+        search_books(db, "Dune")
+    assert not isinstance(excinfo.value, InvalidQueryError)
+    assert "books_fts" in str(excinfo.value)
