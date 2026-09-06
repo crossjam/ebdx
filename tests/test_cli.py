@@ -9,6 +9,7 @@ real user data directory.
 
 from __future__ import annotations
 
+import sqlite3
 import sys
 
 import pytest
@@ -148,6 +149,28 @@ def test_malformed_query_exits_nonzero_without_a_traceback(
     assert result.exit_code != 0
     assert "Traceback" not in result.output
     assert "Invalid search query" in result.output
+
+
+def test_a_damaged_index_reports_a_database_error_not_a_bad_query(
+    runner, tmp_path, make_epub
+):
+    """A corrupt books_fts must exit cleanly as a database fault, and must not
+    be presented to the user as a malformed query."""
+    db_path = _index_library(
+        runner, tmp_path, make_epub, [{"title": "Dune", "author": "Frank Herbert"}]
+    )
+    conn = sqlite3.connect(db_path)
+    conn.execute("DROP TABLE books_fts")
+    conn.execute("CREATE TABLE books_fts (rowid INTEGER, title TEXT)")
+    conn.commit()
+    conn.close()
+
+    result = runner.invoke(cli, ["search", "Dune", "--database", str(db_path)])
+
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output
+    assert "Database error" in result.output
+    assert "Invalid search query" not in result.output
 
 
 # --- 5.4 discover and informational commands --------------------------------

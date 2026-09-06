@@ -16,6 +16,7 @@ import pytest
 import sqlite_utils
 
 from ebdx.db import (
+    _FTS_COLUMNS,
     SCHEMA_VERSION,
     InvalidQueryError,
     get_database,
@@ -241,7 +242,17 @@ def test_search_results_carry_the_source_path(tmp_path):
 
 @pytest.mark.parametrize(
     "bad_query",
-    ['"unbalanced', "AND", "NEAR(", "a OR OR b", "badcol:Dune"],
+    [
+        '"unbalanced',  # unterminated string
+        "AND",  # bare operator
+        "NEAR(",  # truncated NEAR
+        "a OR OR b",  # doubled operator
+        "^",  # bare anchor
+        "* ",  # unknown special query
+        "x.y:hello",  # dotted column filter
+        "badcol:Dune",  # unknown column filter
+        "{nope title}:Dune",  # unknown column in a braced filter
+    ],
 )
 def test_malformed_query_raises_invalid_query_error(tmp_path, bad_query):
     db = get_database(str(tmp_path / "ebdx.db"))
@@ -249,6 +260,37 @@ def test_malformed_query_raises_invalid_query_error(tmp_path, bad_query):
 
     with pytest.raises(InvalidQueryError):
         search_books(db, bad_query)
+
+
+@pytest.mark.parametrize(
+    "good_query",
+    [
+        "Dune",
+        "title:Dune",
+        "{title author}:Dune",
+        '"Dune"',
+        "Dune OR Foundation",
+        "Frank NEAR Herbert",
+        "Dun*",
+        "-series:Chronicles title:Dune",
+    ],
+)
+def test_valid_query_forms_are_accepted(tmp_path, good_query):
+    """The validator must not reject legitimate FTS5 syntax."""
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(path="/library/dune.epub", title="Dune", author="Frank Herbert"))
+
+    search_books(db, good_query)  # must not raise
+
+
+def test_probe_columns_match_the_real_fts_table(tmp_path):
+    """The validator's scratch table must carry the same columns as books_fts,
+    or a valid column filter could be rejected (or a bad one accepted)."""
+    db = get_database(str(tmp_path / "ebdx.db"))
+
+    actual = tuple(row[1] for row in db.execute("PRAGMA table_info(books_fts)"))
+
+    assert actual == _FTS_COLUMNS
 
 
 def test_unrelated_operational_error_is_not_masked_as_a_bad_query(tmp_path):
@@ -261,6 +303,28 @@ def test_unrelated_operational_error_is_not_masked_as_a_bad_query(tmp_path):
         search_books(db, "Dune")
     assert not isinstance(excinfo.value, InvalidQueryError)
     assert "books_fts" in str(excinfo.value)
+
+
+def test_non_fts_books_fts_table_is_not_masked_as_a_bad_query(tmp_path):
+    """A books_fts replaced by an ordinary table makes MATCH report
+    "no such column: books_fts" — a database fault, not the user's query."""
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+    db.execute("DROP TABLE books_fts")
+    db.execute("CREATE TABLE books_fts (rowid INTEGER, title TEXT)")
+
+    with pytest.raises(sqlite3.OperationalError) as excinfo:
+        search_books(db, "Dune")
+    assert not isinstance(excinfo.value, InvalidQueryError)
+    assert "books_fts" in str(excinfo.value)
+
+
+def test_a_real_column_filter_still_searches(tmp_path):
+    """The unknown-filter handling must not break a valid column filter."""
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+
+    assert [hit["title"] for hit in search_books(db, "title:Dune")] == ["Dune"]
 
 
 def test_missing_regular_table_column_is_not_masked_as_a_bad_query(tmp_path):

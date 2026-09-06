@@ -5,7 +5,6 @@ Provides database connection management and query functions
 for indexing and searching EPUB metadata using sqlite_utils.
 """
 
-import re
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -24,38 +23,48 @@ class InvalidQueryError(ValueError):
     """
 
 
-# SQLite reports both a malformed FTS5 query and unrelated faults (a locked
-# database, a missing or corrupt FTS table, schema drift) as
-# ``sqlite3.OperationalError``. These substrings mark the FTS5 query-parser
-# failures, which are the user's to fix; anything else is a real database
-# error and must propagate unchanged.
-_FTS_QUERY_ERROR_MARKERS = (
-    "fts5: ",
-    "unterminated string",
-    "unrecognized token",
-    "unknown special query",
-)
-
-# FTS5 reports an unknown column filter ("badcol:term") as "no such column:
-# badcol" — a bare identifier. The generated SELECT only ever references
-# alias-qualified columns (b.title, a.name, ...), so "no such column: b.x"
-# with a dotted name is schema drift and must propagate, while a bare name is
-# the user's column filter.
-_UNKNOWN_FTS_COLUMN_RE = re.compile(r"no such column: \w+$")
-
 # Bumped whenever the on-disk layout changes incompatibly. Stored in the
 # database's ``PRAGMA user_version``; a file below this (with data) is rebuilt.
 SCHEMA_VERSION = 1
 
 _FTS_TRIGGERS = ("books_ai", "books_ad", "books_au")
 
+# Searchable columns of ``books_fts``, in order. Single source of truth: the
+# table is created from this list, and the query validator below builds its
+# scratch table from the same list so column filters resolve identically.
+# These are plain identifiers written here, never caller input.
+_FTS_COLUMNS = ("title", "author", "series", "tags")
 
-def _is_fts_query_error(exc: sqlite3.OperationalError) -> bool:
-    """True when ``exc`` is FTS5 rejecting the query text, not a database fault."""
-    message = str(exc).lower().strip()
-    if any(marker in message for marker in _FTS_QUERY_ERROR_MARKERS):
-        return True
-    return _UNKNOWN_FTS_COLUMN_RE.search(message) is not None
+
+def _validate_fts_query(query: str) -> None:
+    """Raise :class:`InvalidQueryError` if FTS5 cannot parse ``query``.
+
+    The query is parsed against a scratch in-memory FTS5 table carrying the
+    same columns as ``books_fts``. That table is built here and is known
+    good, so any error it raises is the query's fault -- there is no locked
+    file, corrupt index, or schema drift in play to confuse the verdict.
+
+    Deciding it this way, rather than by inspecting SQLite's error strings
+    after the real query fails, is what keeps the two cases apart: SQLite
+    reports a bad query and a broken database through the same exception
+    type and overlapping messages (``no such column: badcol`` for a mistyped
+    column filter, ``no such column: books_fts`` for a corrupted index), so
+    no amount of message matching can reliably tell them apart. With the
+    query proven parseable here, every error from the real query is
+    unambiguously a database fault and is left to propagate.
+    """
+    probe = sqlite3.connect(":memory:")
+    try:
+        probe.execute(
+            f"CREATE VIRTUAL TABLE probe USING fts5({', '.join(_FTS_COLUMNS)})"
+        )
+        probe.execute(
+            "SELECT rowid FROM probe WHERE probe MATCH ?", (query,)
+        ).fetchall()
+    except sqlite3.OperationalError as e:
+        raise InvalidQueryError(str(e)) from e
+    finally:
+        probe.close()
 
 
 def get_database(db_path: str | Path) -> "Database":
@@ -156,12 +165,9 @@ def _create_schema(db: "Database") -> None:
 
     # FTS5 full-text search index
     db.execute(
-        """
+        f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS books_fts USING fts5(
-            title,
-            author,
-            series,
-            tags,
+            {", ".join(_FTS_COLUMNS)},
             content="books",
             content_rowid="id"
         )
@@ -283,30 +289,31 @@ def search_books(db: "Database", query: str, limit: int | None = None) -> list[d
 
     Returns:
         List of book dictionaries matching the query.
+
+    Raises:
+        InvalidQueryError: if ``query`` is not a parseable FTS5 expression.
+        sqlite3.OperationalError: if the database itself cannot serve the
+            search (locked file, missing or corrupt index, schema drift).
     """
     if limit is None:
         limit = 20
 
-    try:
-        results = db.execute(
-            """
-            SELECT b.id, b.path, b.title, a.name as author, b.series, b.series_index
-            FROM books_fts
-            JOIN books b ON books_fts.rowid = b.id
-            JOIN authors a ON b.author_id = a.id
-            WHERE books_fts MATCH ?
-            ORDER BY rank
-            LIMIT ?
-            """,
-            (query, limit),
-        ).fetchall()
-    except sqlite3.OperationalError as e:
-        # A malformed FTS5 query (unbalanced quotes, a bare operator) surfaces
-        # here as an OperationalError; re-raise as a typed error the CLI can
-        # report cleanly. Unrelated operational failures propagate unchanged.
-        if not _is_fts_query_error(e):
-            raise
-        raise InvalidQueryError(str(e)) from e
+    # Settle "is this query well formed?" before touching the real database,
+    # so the statement below can only fail for database reasons.
+    _validate_fts_query(query)
+
+    results = db.execute(
+        """
+        SELECT b.id, b.path, b.title, a.name as author, b.series, b.series_index
+        FROM books_fts
+        JOIN books b ON books_fts.rowid = b.id
+        JOIN authors a ON b.author_id = a.id
+        WHERE books_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+        """,
+        (query, limit),
+    ).fetchall()
 
     books = []
     for row in results:

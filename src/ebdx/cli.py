@@ -5,6 +5,7 @@ Provides a Click-based command-line interface with discover, index, and search
 commands for managing an EPUB metadata index.
 """
 
+import sqlite3
 import sys
 from importlib.metadata import metadata as get_metadata
 from importlib.metadata import version as get_version
@@ -227,6 +228,17 @@ def search(query: str, database, limit: int):
         results = search_books(db, query, limit=limit)
     except InvalidQueryError as e:
         console.print(f"[red]Invalid search query:[/red] {e}")
+        raise click.Abort() from e
+    except sqlite3.OperationalError as e:
+        # search_books validates the query first, so reaching here means the
+        # database cannot serve the search: a locked file, a corrupt index,
+        # schema drift. Reported separately so it is never mistaken for the
+        # user mistyping a query.
+        console.print(f"[red]Database error:[/red] {e}")
+        console.print(
+            f"[yellow]The index at {database} may be damaged; re-run "
+            "'ebdx index <directory>' to rebuild it.[/yellow]"
+        )
         raise click.Abort() from e
 
     if not results:
