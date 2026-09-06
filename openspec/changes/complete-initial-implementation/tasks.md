@@ -5,9 +5,9 @@
 
 ## 2. Durable schema
 
-- [ ] 2.1 Add a `SCHEMA_VERSION` constant and a `_ensure_schema` branch that reads `PRAGMA user_version`, rebuilds books/authors/`books_fts`/triggers when it is below current, and stamps the version; verify with a test that opens a database with a hand-built pre-`path` `books` table and asserts the rebuilt table has a `path` column
-- [ ] 2.2 Replace every `replace=True` in `_ensure_schema` with `if_not_exists=True` and add `path` (`str`, not null) to the `books` column definitions plus a unique index on `path`; verify with a test that saves a book, closes the database, reopens via `get_database`, and asserts the book is still present — this is the regression test for the wipe bug
-- [ ] 2.3 Confirm the FTS5 triggers still reference the correct columns after the schema change and verify with tests that a title is findable after insert, reflects the new value after update, and is absent after delete
+- [x] 2.1 Add a `SCHEMA_VERSION` constant and a `_ensure_schema` branch that reads `PRAGMA user_version`, rebuilds books/authors/`books_fts`/triggers when it is below current, and stamps the version; verify with a test that opens a database with a hand-built pre-`path` `books` table and asserts the rebuilt table has a `path` column
+- [x] 2.2 Replace every `replace=True` in `_ensure_schema` with `if_not_exists=True` and add `path` (`str`, not null) to the `books` column definitions plus a unique index on `path`; verify with a test that saves a book, closes the database, reopens via `get_database`, and asserts the book is still present — this is the regression test for the wipe bug
+- [x] 2.3 Confirm the FTS5 triggers still reference the correct columns after the schema change and verify with tests that a title is findable after insert, reflects the new value after update, and is absent after delete
 
 ## 3. Path-keyed persistence
 

@@ -13,6 +13,12 @@ from loguru import logger
 if TYPE_CHECKING:
     from sqlite_utils import Database
 
+# Bumped whenever the on-disk layout changes incompatibly. Stored in the
+# database's ``PRAGMA user_version``; a file below this (with data) is rebuilt.
+SCHEMA_VERSION = 1
+
+_FTS_TRIGGERS = ("books_ai", "books_ad", "books_au")
+
 
 def get_database(db_path: str | Path) -> "Database":
     """Get a database connection, creating the schema if needed.
@@ -34,23 +40,63 @@ def get_database(db_path: str | Path) -> "Database":
 
 
 def _ensure_schema(db: "Database") -> None:
-    """Ensure the database schema exists.
+    """Ensure the database schema exists and is current.
 
-    Creates tables for books, authors, and FTS5 search index if they
-    do not already exist.
+    The layout version is recorded in ``PRAGMA user_version``. A database
+    written before path-keyed book identity (version below ``SCHEMA_VERSION``
+    but already carrying a ``books`` table) is rebuilt from scratch rather
+    than operated against; a database already at the current version keeps
+    all of its data, since every create below is ``IF NOT EXISTS``.
+    """
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+
+    if version > SCHEMA_VERSION:
+        logger.warning(
+            f"Database schema version {version} is newer than this build "
+            f"expects ({SCHEMA_VERSION}); using it unchanged"
+        )
+    elif version < SCHEMA_VERSION and "books" in db.table_names():
+        logger.info(
+            f"Rebuilding database schema: on-disk version {version}, "
+            f"current version {SCHEMA_VERSION}"
+        )
+        _drop_schema(db)
+
+    _create_schema(db)
+
+    if version < SCHEMA_VERSION:
+        db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def _drop_schema(db: "Database") -> None:
+    """Drop every ebdx-managed trigger, table, and index."""
+    for trigger in _FTS_TRIGGERS:
+        db.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    db.execute("DROP TABLE IF EXISTS books_fts")
+    db["books"].drop(ignore=True)
+    db["authors"].drop(ignore=True)
+
+
+def _create_schema(db: "Database") -> None:
+    """Create the books, authors, and FTS5 objects if they are absent.
+
+    Safe to call on every open: an up-to-date database is left untouched.
     """
     # Authors table
     db["authors"].create(
         {"id": int, "name": str},
         pk="id",
         not_null=["name"],
-        replace=True,
+        if_not_exists=True,
     )
 
-    # Books table
+    # Books table. `id` stays an autoincrement integer because the
+    # external-content FTS5 index keys on it via content_rowid; `path` is the
+    # stable identity used by the indexer and carries a unique index.
     db["books"].create(
         {
             "id": int,
+            "path": str,
             "title": str,
             "author_id": int,
             "series": str,
@@ -62,10 +108,11 @@ def _ensure_schema(db: "Database") -> None:
             "tags": str,
         },
         pk="id",
-        not_null=["title"],
+        not_null=["title", "path"],
         foreign_keys=["author_id"],
-        replace=True,
+        if_not_exists=True,
     )
+    db["books"].create_index(["path"], unique=True, if_not_exists=True)
 
     # FTS5 full-text search index
     db.execute(
@@ -139,9 +186,11 @@ def save_book(db: "Database", book_data: dict) -> int:
         db["authors"].insert({"name": author_name})
         author_id = db["authors"].lookup({"name": author_name})
 
-    # Insert book (no upsert since auto-increment PK)
+    # Insert book. `path` is required by the schema; §3 rewrites this into a
+    # path-keyed upsert. For now it is passed straight through.
     db["books"].insert(
         {
+            "path": book_data.get("path"),
             "title": book_data.get("title", ""),
             "author_id": author_id,
             "series": book_data.get("series", ""),
