@@ -1,9 +1,13 @@
-"""Tests for the durable schema in ebdx.db (cii §2).
+"""Tests for the ebdx.db storage layer (cii §2 and §3).
 
-Covers: data surviving a reopen (the regression test for the wipe bug),
-schema-version stamping and the pre-path rebuild, the unique index on
-``path``, and the FTS5 triggers staying in step with ``books`` across
-insert, update, and delete.
+§2 — durable schema: data surviving a reopen (the regression test for the
+wipe bug), schema-version stamping and the pre-path rebuild, the unique
+index on ``path``, and the FTS5 triggers staying in step with ``books``
+across insert, update, and delete.
+
+§3 — path-keyed persistence: ``save_book`` identifying a book by its path,
+updating in place, reporting inserted vs updated, and ``search_books``
+carrying the source path.
 """
 
 import sqlite3
@@ -11,7 +15,7 @@ import sqlite3
 import pytest
 import sqlite_utils
 
-from ebdx.db import SCHEMA_VERSION, get_database, save_book
+from ebdx.db import SCHEMA_VERSION, get_database, save_book, search_books
 
 
 def _book(**overrides):
@@ -130,9 +134,9 @@ def test_fts_finds_book_after_insert(tmp_path):
 
 def test_fts_reflects_title_update(tmp_path):
     db = get_database(str(tmp_path / "ebdx.db"))
-    book_id = save_book(db, _book(title="Old Title"))
+    saved = save_book(db, _book(title="Old Title"))
 
-    db["books"].update(book_id, {"title": "New Title"})
+    db["books"].update(saved.id, {"title": "New Title"})
 
     assert _match_count(db, "New") == 1
     assert _match_count(db, "Old") == 0
@@ -140,16 +144,90 @@ def test_fts_reflects_title_update(tmp_path):
 
 def test_fts_drops_deleted_book(tmp_path):
     db = get_database(str(tmp_path / "ebdx.db"))
-    book_id = save_book(db, _book(title="Ephemeral"))
+    saved = save_book(db, _book(title="Ephemeral"))
     assert _match_count(db, "Ephemeral") == 1
 
-    db["books"].delete(book_id)
+    db["books"].delete(saved.id)
 
     assert _match_count(db, "Ephemeral") == 0
 
 
 def test_duplicate_path_violates_unique_index(tmp_path):
+    """The schema constraint holds even for a direct insert that bypasses save_book."""
     db = get_database(str(tmp_path / "ebdx.db"))
-    save_book(db, _book())
+    db["authors"].insert({"name": "Frank Herbert"})
+    db["books"].insert({"path": "/dup.epub", "title": "A", "author_id": 1})
     with pytest.raises(sqlite3.IntegrityError):
-        save_book(db, _book(title="Dune (other copy)"))
+        db["books"].insert({"path": "/dup.epub", "title": "B", "author_id": 1})
+
+
+# --- §3: path-keyed persistence ---------------------------------------------
+
+
+def test_save_book_reports_inserted_then_updated(tmp_path):
+    db = get_database(str(tmp_path / "ebdx.db"))
+
+    first = save_book(db, _book(title="Draft"))
+    second = save_book(db, _book(title="Final"))
+
+    assert first.created is True
+    assert second.created is False
+    assert first.id == second.id
+
+
+def test_saving_same_path_twice_updates_in_place(tmp_path):
+    db = get_database(str(tmp_path / "ebdx.db"))
+
+    first = save_book(db, _book(title="Draft", publisher="Self"))
+    save_book(db, _book(title="Final", publisher="Ace"))
+
+    assert db["books"].count == 1
+    row = db["books"].get(first.id)
+    assert row["title"] == "Final"
+    assert row["publisher"] == "Ace"
+
+
+def test_distinct_paths_are_distinct_books(tmp_path):
+    db = get_database(str(tmp_path / "ebdx.db"))
+
+    a = save_book(db, _book(path="/library/a.epub"))
+    b = save_book(db, _book(path="/library/b.epub"))  # identical title + author
+
+    assert a.id != b.id
+    assert db["books"].count == 2
+    assert db["authors"].count == 1  # the author record is reused
+
+
+@pytest.mark.parametrize("bad_path", [None, "", "   "])
+def test_save_book_rejects_empty_path(tmp_path, bad_path):
+    db = get_database(str(tmp_path / "ebdx.db"))
+    with pytest.raises(ValueError):
+        save_book(db, _book(path=bad_path))
+    assert db["books"].count == 0
+
+
+def test_save_book_rejects_missing_path(tmp_path):
+    db = get_database(str(tmp_path / "ebdx.db"))
+    data = _book()
+    del data["path"]
+    with pytest.raises(ValueError):
+        save_book(db, data)
+    assert db["books"].count == 0
+
+
+def test_save_book_accepts_a_path_object(tmp_path):
+    db = get_database(str(tmp_path / "ebdx.db"))
+    epub_path = tmp_path / "sub" / "dune.epub"
+
+    saved = save_book(db, _book(path=epub_path))
+
+    assert db["books"].get(saved.id)["path"] == str(epub_path)
+
+
+def test_search_results_carry_the_source_path(tmp_path):
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+
+    (hit,) = search_books(db, "Dune")
+
+    assert hit["path"] == "/library/dune.epub"

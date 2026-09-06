@@ -11,9 +11,9 @@
 
 ## 3. Path-keyed persistence
 
-- [ ] 3.1 Rewrite `save_book` to require a non-empty `path`, raise on a missing one, look the path up in `books`, then `update` the found id or `insert`; verify with tests that saving the same path twice leaves one row with a stable id and updated fields, that two paths with identical title/author give two rows, and that an empty path raises
-- [ ] 3.2 Return from `save_book` whether the row was inserted or updated, and drop the dead `try/except KeyError` around `lookup` and the `SELECT last_insert_rowid()` call in favour of `.last_pk`; verify with a test asserting the insert/update flag across two consecutive saves of one path
-- [ ] 3.3 Add `path` to the `search_books` projection; verify with a test that a search hit carries the absolute path of the file it was indexed from
+- [x] 3.1 Rewrite `save_book` to require a non-empty `path`, raise on a missing one, look the path up in `books`, then `update` the found id or `insert`; verify with tests that saving the same path twice leaves one row with a stable id and updated fields, that two paths with identical title/author give two rows, and that an empty path raises
+- [x] 3.2 Return from `save_book` whether the row was inserted or updated, and drop the dead `try/except KeyError` around `lookup` and the `SELECT last_insert_rowid()` call in favour of `.last_pk`; verify with a test asserting the insert/update flag across two consecutive saves of one path
+- [x] 3.3 Add `path` to the `search_books` projection; verify with a test that a search hit carries the absolute path of the file it was indexed from
 
 ## 4. Indexing pipeline
 

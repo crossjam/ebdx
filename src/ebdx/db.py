@@ -6,7 +6,7 @@ for indexing and searching EPUB metadata using sqlite_utils.
 """
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from loguru import logger
 
@@ -167,46 +167,70 @@ def _create_schema(db: "Database") -> None:
     )
 
 
-def save_book(db: "Database", book_data: dict) -> int:
-    """Save a single book and its author to the database.
+class SavedBook(NamedTuple):
+    """Outcome of :func:`save_book`."""
+
+    id: int
+    created: bool  # True when a new row was inserted, False when one was updated
+
+
+def save_book(db: "Database", book_data: dict) -> SavedBook:
+    """Insert or update one book, keyed by its filesystem path.
+
+    The book is identified by ``book_data["path"]``. If a row with that path
+    already exists it is updated in place and keeps its id; otherwise a new
+    row is inserted. The author is looked up or created by name.
 
     Args:
         db: The database connection.
-        book_data: Dictionary with book metadata (title, author, series, etc.).
+        book_data: Book metadata. ``path`` is required and must be non-empty;
+            everything else defaults to empty.
 
     Returns:
-        The ID of the saved book.
+        A :class:`SavedBook` with the row id and whether it was newly created.
+
+    Raises:
+        ValueError: if ``book_data`` carries no non-empty ``path``.
     """
-    author_name = book_data.get("author", "")
+    raw_path = book_data.get("path")
+    path = "" if raw_path is None else str(raw_path)
+    if not path.strip():
+        raise ValueError("save_book requires a non-empty 'path'")
 
-    # Upsert author by name (using lookup to find existing)
-    try:
-        author_id = db["authors"].lookup({"name": author_name})
-    except KeyError:
-        db["authors"].insert({"name": author_name})
-        author_id = db["authors"].lookup({"name": author_name})
+    # lookup() is get-or-create, so an unknown name is inserted and its id
+    # returned in one call.
+    author_id = db["authors"].lookup({"name": book_data.get("author", "")})
 
-    # Insert book. `path` is required by the schema; §3 rewrites this into a
-    # path-keyed upsert. For now it is passed straight through.
-    db["books"].insert(
-        {
-            "path": book_data.get("path"),
-            "title": book_data.get("title", ""),
-            "author_id": author_id,
-            "series": book_data.get("series", ""),
-            "series_index": book_data.get("series_index"),
-            "publisher": book_data.get("publisher", ""),
-            "published": book_data.get("published", ""),
-            "isbn": book_data.get("isbn", ""),
-            "language": book_data.get("language", ""),
-            "tags": book_data.get("tags", ""),
-        },
+    fields = {
+        "path": path,
+        "title": book_data.get("title", ""),
+        "author_id": author_id,
+        "series": book_data.get("series", ""),
+        "series_index": book_data.get("series_index"),
+        "publisher": book_data.get("publisher", ""),
+        "published": book_data.get("published", ""),
+        "isbn": book_data.get("isbn", ""),
+        "language": book_data.get("language", ""),
+        "tags": book_data.get("tags", ""),
+    }
+
+    books = db["books"]
+    existing_id = next(
+        (row["id"] for row in books.rows_where("path = ?", [path])), None
     )
 
-    book_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    if existing_id is None:
+        books.insert(fields)
+        result = SavedBook(id=books.last_pk, created=True)
+    else:
+        books.update(existing_id, fields)
+        result = SavedBook(id=existing_id, created=False)
 
-    logger.debug(f"Saved book: {book_data.get('title', '')}")
-    return book_id
+    logger.debug(
+        f"{'Inserted' if result.created else 'Updated'} book "
+        f"'{fields['title']}' ({path})"
+    )
+    return result
 
 
 def search_books(db: "Database", query: str, limit: int | None = None) -> list[dict]:
@@ -225,7 +249,7 @@ def search_books(db: "Database", query: str, limit: int | None = None) -> list[d
 
     results = db.execute(
         """
-        SELECT b.id, b.title, a.name as author, b.series, b.series_index
+        SELECT b.id, b.path, b.title, a.name as author, b.series, b.series_index
         FROM books_fts
         JOIN books b ON books_fts.rowid = b.id
         JOIN authors a ON b.author_id = a.id
@@ -241,10 +265,11 @@ def search_books(db: "Database", query: str, limit: int | None = None) -> list[d
         books.append(
             {
                 "id": row[0],
-                "title": row[1],
-                "author": row[2],
-                "series": row[3],
-                "series_index": row[4],
+                "path": row[1],
+                "title": row[2],
+                "author": row[3],
+                "series": row[4],
+                "series_index": row[5],
             }
         )
 
