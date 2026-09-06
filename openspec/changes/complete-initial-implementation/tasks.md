@@ -23,10 +23,10 @@
 
 ## 5. CLI behavior
 
-- [ ] 5.1 Add `-v/--verbose` and `-q/--quiet` to the `cli` group callback, removing loguru's default sink and installing one at WARNING (default), INFO (verbose), or ERROR (quiet); verify with `CliRunner` tests asserting no debug lines by default and an "Opening database" line under `--verbose`
-- [ ] 5.2 Add the `Updated` row to the indexing summary table and a `Path` column to the search results table; verify with `CliRunner` tests asserting both appear in the rendered output
-- [ ] 5.3 Wrap the FTS query so an unparseable search query prints an error and exits non-zero instead of raising; verify with a `CliRunner` test on a query with unbalanced quotes asserting non-zero exit and no traceback in the output
-- [ ] 5.4 Add `CliRunner` tests for `discover` (nested files, case-insensitive extension, non-EPUBs ignored, no database created), and for `version`/`about`/`schema` succeeding with no database present
+- [x] 5.1 Add `-v/--verbose` and `-q/--quiet` to the `cli` group callback, removing loguru's default sink and installing one at WARNING (default), INFO (verbose), or ERROR (quiet); verify with `CliRunner` tests asserting no debug lines by default and an "Opening database" line under `--verbose`
+- [x] 5.2 Add the `Updated` row to the indexing summary table and a `Path` column to the search results table; verify with `CliRunner` tests asserting both appear in the rendered output
+- [x] 5.3 Wrap the FTS query so an unparseable search query prints an error and exits non-zero instead of raising; verify with a `CliRunner` test on a query with unbalanced quotes asserting non-zero exit and no traceback in the output
+- [x] 5.4 Add `CliRunner` tests for `discover` (nested files, case-insensitive extension, non-EPUBs ignored, no database created), and for `version`/`about`/`schema` succeeding with no database present
 
 ## 6. Cleanup and docs
 

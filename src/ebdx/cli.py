@@ -5,17 +5,34 @@ Provides a Click-based command-line interface with discover, index, and search
 commands for managing an EPUB metadata index.
 """
 
+import sys
 from importlib.metadata import metadata as get_metadata
 from importlib.metadata import version as get_version
 from pathlib import Path
 
 import click
+from loguru import logger
 from platformdirs import user_data_dir
 from rich.console import Console
 
 APP_NAME = "ebdx"
 APP_AUTHOR = "crossjam"
 console = Console()
+
+
+def _configure_logging(*, verbose: bool, quiet: bool) -> None:
+    """Replace loguru's default sink with one at the requested level.
+
+    Default is WARNING; ``--verbose`` lifts it to INFO (so the per-open
+    "Opening database" line shows), ``--quiet`` drops it to ERROR. Rich
+    ``console.print`` output is unaffected — it carries command results, not
+    logs, and stays visible under ``--quiet``.
+    """
+    if verbose and quiet:
+        raise click.UsageError("Pass at most one of -v/--verbose and -q/--quiet.")
+    level = "INFO" if verbose else "ERROR" if quiet else "WARNING"
+    logger.remove()
+    logger.add(sys.stderr, level=level)
 
 
 def _get_pkg_version() -> str:
@@ -63,12 +80,24 @@ def get_default_db_path() -> Path:
 
 
 @click.group()
-def cli():
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Show informational log output (database opens, rebuilds).",
+)
+@click.option(
+    "-q",
+    "--quiet",
+    is_flag=True,
+    help="Suppress warnings; show only errors.",
+)
+def cli(verbose: bool, quiet: bool):
     """ebdx - eBook Database tool.
 
     Index and search EPUB metadata from your personal library.
     """
-    pass
+    _configure_logging(verbose=verbose, quiet=quiet)
 
 
 @cli.command()
@@ -87,7 +116,11 @@ def discover(paths: tuple[Path, ...]):
         if path.is_file() and path.suffix.lower() == ".epub":
             epub_files.append(path)
         elif path.is_dir():
-            epub_files.extend(path.rglob("*.epub"))
+            epub_files.extend(
+                p
+                for p in path.rglob("*")
+                if p.is_file() and p.suffix.lower() == ".epub"
+            )
 
     if not epub_files:
         console.print("[yellow]No EPUB files discovered.[/yellow]")
@@ -179,7 +212,7 @@ def search(query: str, database, limit: int):
         ebdx search "Dune"
         ebdx search "Asimov" --limit 10
     """
-    from ebdx.db import get_database, search_books
+    from ebdx.db import InvalidQueryError, get_database, search_books
 
     if database is None:
         database = get_default_db_path()
@@ -192,7 +225,11 @@ def search(query: str, database, limit: int):
         raise click.Abort()
 
     db = get_database(str(database))
-    results = search_books(db, query, limit=limit)
+    try:
+        results = search_books(db, query, limit=limit)
+    except InvalidQueryError as e:
+        console.print(f"[red]Invalid search query:[/red] {e}")
+        raise click.Abort() from e
 
     if not results:
         console.print("[yellow]No results found.[/yellow]")
@@ -205,13 +242,16 @@ def search(query: str, database, limit: int):
     table.add_column("Author", style="magenta")
     table.add_column("Series", style="green")
     table.add_column("Index", style="yellow")
+    table.add_column("Path", style="blue")
 
     for row in results:
+        series_index = row.get("series_index")
         table.add_row(
             row["title"],
             row["author"],
             row.get("series") or "",
-            str(row.get("series_index", "")),
+            "" if series_index is None else str(series_index),
+            row.get("path") or "",
         )
 
     console.print(table)

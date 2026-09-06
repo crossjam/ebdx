@@ -5,6 +5,7 @@ Provides database connection management and query functions
 for indexing and searching EPUB metadata using sqlite_utils.
 """
 
+import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -12,6 +13,14 @@ from loguru import logger
 
 if TYPE_CHECKING:
     from sqlite_utils import Database
+
+
+class InvalidQueryError(ValueError):
+    """Raised when a search query cannot be parsed by SQLite FTS5.
+
+    Carries the underlying SQLite message so the CLI can show it without
+    leaking a traceback.
+    """
 
 # Bumped whenever the on-disk layout changes incompatibly. Stored in the
 # database's ``PRAGMA user_version``; a file below this (with data) is rebuilt.
@@ -249,18 +258,24 @@ def search_books(db: "Database", query: str, limit: int | None = None) -> list[d
     if limit is None:
         limit = 20
 
-    results = db.execute(
-        """
-        SELECT b.id, b.path, b.title, a.name as author, b.series, b.series_index
-        FROM books_fts
-        JOIN books b ON books_fts.rowid = b.id
-        JOIN authors a ON b.author_id = a.id
-        WHERE books_fts MATCH ?
-        ORDER BY rank
-        LIMIT ?
-        """,
-        (query, limit),
-    ).fetchall()
+    try:
+        results = db.execute(
+            """
+            SELECT b.id, b.path, b.title, a.name as author, b.series, b.series_index
+            FROM books_fts
+            JOIN books b ON books_fts.rowid = b.id
+            JOIN authors a ON b.author_id = a.id
+            WHERE books_fts MATCH ?
+            ORDER BY rank
+            LIMIT ?
+            """,
+            (query, limit),
+        ).fetchall()
+    except sqlite3.OperationalError as e:
+        # A malformed FTS5 query (unbalanced quotes, a bare operator) surfaces
+        # here as an OperationalError; re-raise as a typed error the CLI can
+        # report cleanly.
+        raise InvalidQueryError(str(e)) from e
 
     books = []
     for row in results:
