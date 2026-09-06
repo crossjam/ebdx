@@ -46,9 +46,13 @@ def extract_metadata(epub_path: Path) -> dict | None:
         published = date_meta[0][0] if date_meta else ""
 
         isbn = ""
-        for identifier in book.get_metadata("DC", "identifier"):
-            if identifier[1] and "isbn" in identifier[1].lower():
-                isbn = identifier[0]
+        for value, attrs in book.get_metadata("DC", "identifier"):
+            # attrs is a dict (e.g. {"scheme": "ISBN"} or a namespaced key);
+            # match an ISBN scheme or a urn:isbn: value without assuming shape.
+            haystack = f"{value} {' '.join(str(v) for v in attrs.values())}".lower()
+            if "isbn" in haystack:
+                isbn = value
+                break
 
         language_meta = book.get_metadata("DC", "language")
         language = language_meta[0][0] if language_meta else ""

@@ -53,9 +53,11 @@ def _ensure_schema(db: "Database") -> None:
     if version > SCHEMA_VERSION:
         logger.warning(
             f"Database schema version {version} is newer than this build "
-            f"expects ({SCHEMA_VERSION}); using it unchanged"
+            f"expects ({SCHEMA_VERSION}); leaving it untouched"
         )
-    elif version < SCHEMA_VERSION and "books" in db.table_names():
+        return
+
+    if version < SCHEMA_VERSION and "books" in db.table_names():
         logger.info(
             f"Rebuilding database schema: on-disk version {version}, "
             f"current version {SCHEMA_VERSION}"

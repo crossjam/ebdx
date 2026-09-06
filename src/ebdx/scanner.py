@@ -45,6 +45,9 @@ def scan_and_index(
         try:
             metadata = extract_metadata(epub_path)
             if metadata:
+                # save_book keys a book by its absolute path; the resolved
+                # path is also what search results report.
+                metadata["path"] = str(epub_path.resolve())
                 save_book(db, metadata)
                 stats["indexed"] += 1
             else:
