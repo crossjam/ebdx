@@ -5,6 +5,7 @@ Provides database connection management and query functions
 for indexing and searching EPUB metadata using sqlite_utils.
 """
 
+import re
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -27,17 +28,20 @@ class InvalidQueryError(ValueError):
 # database, a missing or corrupt FTS table, schema drift) as
 # ``sqlite3.OperationalError``. These substrings mark the FTS5 query-parser
 # failures, which are the user's to fix; anything else is a real database
-# error and must propagate unchanged. "no such column" is deliberately not
-# listed: FTS5 emits it for a mistyped column filter ("badcol:term"), but so
-# does a valid search against a books/authors table that has lost a column,
-# and masking the latter as a bad query is worse than the rare unfriendly
-# error for the former.
+# error and must propagate unchanged.
 _FTS_QUERY_ERROR_MARKERS = (
     "fts5: ",
     "unterminated string",
     "unrecognized token",
     "unknown special query",
 )
+
+# FTS5 reports an unknown column filter ("badcol:term") as "no such column:
+# badcol" — a bare identifier. The generated SELECT only ever references
+# alias-qualified columns (b.title, a.name, ...), so "no such column: b.x"
+# with a dotted name is schema drift and must propagate, while a bare name is
+# the user's column filter.
+_UNKNOWN_FTS_COLUMN_RE = re.compile(r"no such column: \w+$")
 
 # Bumped whenever the on-disk layout changes incompatibly. Stored in the
 # database's ``PRAGMA user_version``; a file below this (with data) is rebuilt.
@@ -48,8 +52,10 @@ _FTS_TRIGGERS = ("books_ai", "books_ad", "books_au")
 
 def _is_fts_query_error(exc: sqlite3.OperationalError) -> bool:
     """True when ``exc`` is FTS5 rejecting the query text, not a database fault."""
-    message = str(exc).lower()
-    return any(marker in message for marker in _FTS_QUERY_ERROR_MARKERS)
+    message = str(exc).lower().strip()
+    if any(marker in message for marker in _FTS_QUERY_ERROR_MARKERS):
+        return True
+    return _UNKNOWN_FTS_COLUMN_RE.search(message) is not None
 
 
 def get_database(db_path: str | Path) -> "Database":

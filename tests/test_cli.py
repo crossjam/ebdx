@@ -135,12 +135,15 @@ def test_search_does_not_render_a_missing_series_index_as_none(
 # --- 5.3 malformed query -------------------------------------------------------
 
 
-def test_malformed_query_exits_nonzero_without_a_traceback(runner, tmp_path, make_epub):
+@pytest.mark.parametrize("bad_query", ['"unbalanced', "badcol:Dune"])
+def test_malformed_query_exits_nonzero_without_a_traceback(
+    runner, tmp_path, make_epub, bad_query
+):
     db_path = _index_library(
         runner, tmp_path, make_epub, [{"title": "Dune", "author": "Frank Herbert"}]
     )
 
-    result = runner.invoke(cli, ["search", '"unbalanced', "--database", str(db_path)])
+    result = runner.invoke(cli, ["search", bad_query, "--database", str(db_path)])
 
     assert result.exit_code != 0
     assert "Traceback" not in result.output

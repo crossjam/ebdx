@@ -239,7 +239,10 @@ def test_search_results_carry_the_source_path(tmp_path):
     assert hit["path"] == "/library/dune.epub"
 
 
-@pytest.mark.parametrize("bad_query", ['"unbalanced', "AND", "NEAR(", "a OR OR b"])
+@pytest.mark.parametrize(
+    "bad_query",
+    ['"unbalanced', "AND", "NEAR(", "a OR OR b", "badcol:Dune"],
+)
 def test_malformed_query_raises_invalid_query_error(tmp_path, bad_query):
     db = get_database(str(tmp_path / "ebdx.db"))
     save_book(db, _book(path="/library/dune.epub", title="Dune"))
