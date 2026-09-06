@@ -40,6 +40,17 @@ def test_make_epub_defaults_are_minimal(make_epub):
     assert book.get_metadata("DC", "publisher") == []
 
 
+def test_make_epub_escapes_xml_special_characters_in_title(make_epub):
+    title = 'Tom & Jerry: <Angle> "Quote"'
+    book = epub.read_epub(str(make_epub("special.epub", title=title)))
+
+    assert book.title == title
+
+    chapter = book.get_item_with_href("chapter.xhtml").get_content().decode()
+    assert "&lt;Angle&gt;" in chapter
+    assert "<Angle>" not in chapter
+
+
 def test_make_epub_supports_nested_paths(make_epub):
     path = make_epub("authors/herbert/dune.epub", title="Dune")
 

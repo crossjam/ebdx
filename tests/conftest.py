@@ -9,6 +9,7 @@ in the repo.
 
 from __future__ import annotations
 
+import html
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -41,7 +42,8 @@ def _write_epub(
         book.add_metadata("DC", "subject", subject)
 
     chapter = epub.EpubHtml(title="Start", file_name="chapter.xhtml", lang=language)
-    chapter.content = f"<h1>{title or 'Untitled'}</h1><p>Body text.</p>"
+    heading = html.escape(title or "Untitled")
+    chapter.content = f"<h1>{heading}</h1><p>Body text.</p>"
     book.add_item(chapter)
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())

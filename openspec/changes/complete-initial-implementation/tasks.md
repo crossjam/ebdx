@@ -1,7 +1,7 @@
 ## 1. Test scaffolding
 
-- [ ] 1.1 Add `tests/conftest.py` with a fixture that builds a minimal valid EPUB in `tmp_path` at caller-supplied metadata (title, author, publisher, language, subjects), plus a helper producing a corrupt `.epub`; verify by asserting the generated file is read back by `ebooklib.epub.read_epub` in a smoke test
-- [ ] 1.2 Delete `tests/test_placeholder.py` and confirm `poe test` still collects and passes with only the conftest smoke test
+- [x] 1.1 Add `tests/conftest.py` with a fixture that builds a minimal valid EPUB in `tmp_path` at caller-supplied metadata (title, author, publisher, language, subjects), plus a helper producing a corrupt `.epub`. Keep only the fixtures in `conftest.py` (pytest loads it as configuration, not as a test module) and put the smoke test in a collected `tests/test_*.py` module, asserting the generated file is read back by `ebooklib.epub.read_epub`
+- [x] 1.2 Delete `tests/test_placeholder.py` and confirm `poe test` still collects and passes with the fixture smoke test as the only remaining test
 
 ## 2. Durable schema
 
