@@ -17,9 +17,9 @@
 
 ## 4. Indexing pipeline
 
-- [ ] 4.1 Pass `epub_path.resolve()` into `save_book` from `scan_and_index` and split the returned stats into `total`, `indexed`, `updated`, `failed`; verify with a test that indexing a directory twice reports all files as updated on the second run with no growth in row count
-- [ ] 4.2 Verify the existing continue-past-failure behavior against the corrupt-EPUB fixture with a test asserting valid files are still indexed, the bad file lands in `failed`, and no exception escapes
-- [ ] 4.3 Add extractor tests covering a well-formed EPUB, an EPUB declaring only a title (remaining text fields empty, not absent), and a corrupt file returning `None`; record current `series` behavior as-is rather than fixing it
+- [x] 4.1 Pass `epub_path.resolve()` into `save_book` from `scan_and_index` and split the returned stats into `total`, `indexed`, `updated`, `failed`; verify with a test that indexing a directory twice reports all files as updated on the second run with no growth in row count
+- [x] 4.2 Verify the existing continue-past-failure behavior against the corrupt-EPUB fixture with a test asserting valid files are still indexed, the bad file lands in `failed`, and no exception escapes
+- [x] 4.3 Add extractor tests covering a well-formed EPUB, an EPUB declaring only a title (remaining text fields empty, not absent), and a corrupt file returning `None`; record current `series` behavior as-is rather than fixing it
 
 ## 5. CLI behavior
 

@@ -33,7 +33,8 @@ def _write_epub(
     book = epub.EpubBook()
     book.set_identifier(f"urn:uuid:ebdx-test-{path.stem}")
     book.set_title(title)
-    book.set_language(language)
+    if language:
+        book.set_language(language)
     if author:
         book.add_author(author)
     if publisher:
@@ -41,7 +42,7 @@ def _write_epub(
     for subject in subjects:
         book.add_metadata("DC", "subject", subject)
 
-    chapter = epub.EpubHtml(title="Start", file_name="chapter.xhtml", lang=language)
+    chapter = epub.EpubHtml(title="Start", file_name="chapter.xhtml", lang=language or None)
     heading = html.escape(title or "Untitled")
     chapter.content = f"<h1>{heading}</h1><p>Body text.</p>"
     book.add_item(chapter)

@@ -145,7 +145,8 @@ def index(root: Path, database):
     summary.add_column("Metric", style="cyan")
     summary.add_column("Count", style="magenta", justify="right")
     summary.add_row("Total found", str(stats["total"]))
-    summary.add_row("Successfully indexed", str(stats["indexed"]))
+    summary.add_row("Newly indexed", str(stats["indexed"]))
+    summary.add_row("Updated", str(stats.get("updated", 0)))
     summary.add_row("Failed", str(stats["failed"]))
     console.print(summary)
 
