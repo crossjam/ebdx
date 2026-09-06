@@ -24,15 +24,19 @@ class InvalidQueryError(ValueError):
 
 
 # SQLite reports both a malformed FTS5 query and unrelated faults (a locked
-# database, a missing or corrupt FTS table) as ``sqlite3.OperationalError``.
-# These substrings mark the query-parser failures, which are the user's to
-# fix; anything else is a real database error and must propagate unchanged.
+# database, a missing or corrupt FTS table, schema drift) as
+# ``sqlite3.OperationalError``. These substrings mark the FTS5 query-parser
+# failures, which are the user's to fix; anything else is a real database
+# error and must propagate unchanged. "no such column" is deliberately not
+# listed: FTS5 emits it for a mistyped column filter ("badcol:term"), but so
+# does a valid search against a books/authors table that has lost a column,
+# and masking the latter as a bad query is worse than the rare unfriendly
+# error for the former.
 _FTS_QUERY_ERROR_MARKERS = (
     "fts5: ",
     "unterminated string",
     "unrecognized token",
     "unknown special query",
-    "no such column",
 )
 
 # Bumped whenever the on-disk layout changes incompatibly. Stored in the

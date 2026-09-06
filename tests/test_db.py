@@ -258,3 +258,16 @@ def test_unrelated_operational_error_is_not_masked_as_a_bad_query(tmp_path):
         search_books(db, "Dune")
     assert not isinstance(excinfo.value, InvalidQueryError)
     assert "books_fts" in str(excinfo.value)
+
+
+def test_missing_regular_table_column_is_not_masked_as_a_bad_query(tmp_path):
+    """Schema drift in ``books`` produces "no such column" for a valid search;
+    that must surface as a database fault, not an InvalidQueryError."""
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+    db.execute("ALTER TABLE books DROP COLUMN series_index")
+
+    with pytest.raises(sqlite3.OperationalError) as excinfo:
+        search_books(db, "Dune")
+    assert not isinstance(excinfo.value, InvalidQueryError)
+    assert "series_index" in str(excinfo.value)
