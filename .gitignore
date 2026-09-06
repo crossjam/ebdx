@@ -223,3 +223,6 @@ __marimo__/
 .kata.local.toml
 # roborev snapshots
 /.roborev/
+
+# Claude Code local-only settings (shared skills/commands under .claude/ are tracked)
+.claude/settings.local.json
