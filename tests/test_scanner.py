@@ -5,7 +5,7 @@ database layer, covering the path the ``ebdx index`` command takes.
 """
 
 from ebdx.db import get_database, search_books
-from ebdx.scanner import scan_and_index
+from ebdx.scanner import iter_epub_files, iter_files, scan_and_index
 
 
 def test_scan_and_index_stores_an_extracted_epub(tmp_path, make_epub):
@@ -118,3 +118,39 @@ def test_one_bad_file_does_not_stop_the_run(tmp_path, make_epub, make_corrupt_ep
     assert stats["indexed"] == 2
     assert stats["failed"] == 1
     assert sorted(r["title"] for r in db["books"].rows) == ["Good One", "Good Two"]
+
+
+def test_iter_epub_files_recurses_and_filters_by_suffix(tmp_path, make_epub):
+    make_epub("lib/a/one.epub", title="One")
+    make_epub("lib/a/b/two.EPUB", title="Two")
+    (tmp_path / "lib" / "notes.txt").write_text("nope")
+    (tmp_path / "lib" / "cover.epubx").write_text("nope")
+
+    found = {p.name for p in iter_epub_files(tmp_path / "lib")}
+
+    assert found == {"one.epub", "two.EPUB"}
+
+
+def test_iter_files_is_sorted_and_skips_non_directories(tmp_path):
+    (tmp_path / "b.txt").write_text("b")
+    (tmp_path / "a.txt").write_text("a")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "c.txt").write_text("c")
+
+    assert [p.name for p in iter_files(tmp_path)] == ["a.txt", "b.txt", "c.txt"]
+    # A file (not a directory) as root yields nothing rather than raising.
+    assert list(iter_files(tmp_path / "a.txt")) == []
+
+
+def test_iter_files_does_not_follow_directory_symlink_loops(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "book.epub").write_text("x")
+    loop = real / "loop"
+    loop.symlink_to(real, target_is_directory=True)
+
+    # Terminates (Path.walk does not descend symlinked dirs) and the symlink
+    # is not reported as a file.
+    names = [p.name for p in iter_files(tmp_path)]
+
+    assert names == ["book.epub"]

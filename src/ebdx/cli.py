@@ -108,6 +108,8 @@ def discover(paths: tuple[Path, ...]):
     Scans the specified PATHS for .epub files and displays them in a table.
     If no paths are provided, scans the current directory.
     """
+    from ebdx.scanner import iter_epub_files
+
     if not paths:
         paths = (Path.cwd(),)
 
@@ -116,11 +118,7 @@ def discover(paths: tuple[Path, ...]):
         if path.is_file() and path.suffix.lower() == ".epub":
             epub_files.append(path)
         elif path.is_dir():
-            epub_files.extend(
-                p
-                for p in path.rglob("*")
-                if p.is_file() and p.suffix.lower() == ".epub"
-            )
+            epub_files.extend(iter_epub_files(path))
 
     if not epub_files:
         console.print("[yellow]No EPUB files discovered.[/yellow]")

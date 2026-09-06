@@ -16,6 +16,7 @@ from click.testing import CliRunner
 from loguru import logger
 
 from ebdx.cli import cli
+from ebdx.scanner import iter_files
 
 
 @pytest.fixture(autouse=True)
@@ -163,7 +164,7 @@ def test_discover_finds_nested_epubs_case_insensitively_and_ignores_others(
     assert "two.EPUB" in result.output
     assert "notes.txt" not in result.output
     # discover never creates a database.
-    assert not list(tmp_path.rglob("*.db"))
+    assert not any(p.suffix == ".db" for p in iter_files(tmp_path))
 
 
 def test_discover_reports_when_nothing_is_found(runner, tmp_path):

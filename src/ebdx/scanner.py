@@ -5,10 +5,33 @@ Walks directories to find EPUB files and extracts their metadata
 for indexing into the database.
 """
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import sqlite_utils
 from rich.console import Console
+
+
+def iter_files(root: Path) -> Iterator[Path]:
+    """Yield every regular file at or below ``root``, in sorted order.
+
+    Walks with :meth:`Path.walk` rather than a glob so callers filter on
+    explicit filename checks. ``Path.walk`` does not descend into directory
+    symlinks, so it cannot loop; a non-directory ``root`` yields nothing.
+    """
+    if not root.is_dir():
+        return
+    for dirpath, dirnames, filenames in root.walk():
+        dirnames.sort()
+        for name in sorted(filenames):
+            candidate = dirpath / name
+            if candidate.is_file():
+                yield candidate
+
+
+def iter_epub_files(root: Path) -> Iterator[Path]:
+    """Yield EPUB files at or below ``root``, matching the suffix case-insensitively."""
+    return (p for p in iter_files(root) if p.suffix.lower() == ".epub")
 
 
 def scan_and_index(
@@ -35,7 +58,7 @@ def scan_and_index(
         console = Console()
 
     # Find all epub files
-    epub_files = sorted(root.rglob("*.epub"))
+    epub_files = sorted(iter_epub_files(root))
     console.print(f"[cyan]Found {len(epub_files)} EPUB file(s)[/cyan]")
 
     stats = {"total": len(epub_files), "indexed": 0, "updated": 0, "failed": 0}
