@@ -303,6 +303,49 @@ def test_reopen_repairs_a_non_fts_books_fts_and_keeps_the_books(tmp_path):
     ]
 
 
+def test_reopen_repairs_a_dropped_books_fts_and_keeps_the_books(tmp_path):
+    """A books_fts that is simply gone must be refilled, not recreated empty:
+    otherwise search silently reports no matches for books still in `books`."""
+    db_path = tmp_path / "ebdx.db"
+    db = get_database(str(db_path))
+    save_book(db, _book(path="/library/dune.epub", title="Dune", author="Frank Herbert"))
+    db.execute("DROP TABLE books_fts")
+    db.conn.commit()
+    db.conn.close()
+
+    reopened = get_database(str(db_path))
+
+    assert reopened["books"].count == 1
+    assert [hit["title"] for hit in search_books(reopened, "Dune")] == ["Dune"]
+
+
+def test_repair_refills_every_stored_book(tmp_path):
+    """Repopulation must cover the whole table, not just the first row."""
+    db_path = tmp_path / "ebdx.db"
+    db = get_database(str(db_path))
+    for n in range(5):
+        save_book(db, _book(path=f"/library/{n}.epub", title=f"Book{n}"))
+    db.execute("DROP TABLE books_fts")
+    db.conn.commit()
+    db.conn.close()
+
+    reopened = get_database(str(db_path))
+
+    found = {hit["title"] for hit in search_books(reopened, "Book0 OR Book4")}
+    assert found == {"Book0", "Book4"}
+    assert _match_count(reopened, "Book2") == 1
+
+
+def test_a_fresh_database_searches_normally(tmp_path):
+    """A new database has no books_fts either; that must not confuse the
+    repair path or leave the index unusable."""
+    db = get_database(str(tmp_path / "ebdx.db"))
+
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+
+    assert _match_count(db, "Dune") == 1
+
+
 def test_repaired_index_still_tracks_later_writes(tmp_path):
     """The rebuilt index must come back with its triggers, not just its rows."""
     db_path = tmp_path / "ebdx.db"

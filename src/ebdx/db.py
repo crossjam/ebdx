@@ -95,12 +95,15 @@ def _ensure_schema(db: "Database") -> None:
     than operated against; a database already at the current version keeps
     all of its data, since every create below is ``IF NOT EXISTS``.
 
-    A database stamped at the current version can still be structurally
-    broken -- most visibly a ``books_fts`` that is no longer an FTS5 table,
-    which every search and every indexing write fails against. Because the
-    creates below are ``IF NOT EXISTS`` they would step over such an object
-    forever, so it is dropped and rebuilt from ``books``. The book rows are
-    kept: only the derived index was broken, and it can be recomputed.
+    A database stamped at the current version can still have a broken search
+    index, in either of two ways. A ``books_fts`` that is no longer an FTS5
+    table fails every search and every indexing write, and the ``IF NOT
+    EXISTS`` creates would step over it forever. A ``books_fts`` that is
+    simply gone is quieter and worse: the create puts back an empty
+    external-content table, and searches then report no matches for books
+    that are still sitting in ``books``. Either way the index is dropped,
+    recreated, and refilled from ``books``. The book rows are kept -- only
+    the derived index was broken, and it can be recomputed.
     """
     version = db.execute("PRAGMA user_version").fetchone()[0]
 
@@ -119,10 +122,13 @@ def _ensure_schema(db: "Database") -> None:
         )
         _drop_schema(db)
     elif not _fts_index_is_intact(db):
-        logger.warning(
-            "The books_fts search index is not an FTS5 table; rebuilding it "
-            "from the stored books"
-        )
+        # Warn only when there are books whose index is being rebuilt; on a
+        # new database the index is simply absent and nothing was lost.
+        if _stored_book_count(db):
+            logger.warning(
+                "The books_fts search index is missing or is not an FTS5 "
+                "table; rebuilding it from the stored books"
+            )
         _drop_fts(db)
         repairing_fts = True
 
@@ -136,19 +142,28 @@ def _ensure_schema(db: "Database") -> None:
 
 
 def _fts_index_is_intact(db: "Database") -> bool:
-    """True unless ``books_fts`` exists as something other than an FTS5 table.
+    """True only when ``books_fts`` exists and is an FTS5 table.
 
-    An absent ``books_fts`` counts as intact -- a new or already-dropped
-    database -- because ``_create_schema`` will build it. What this catches
-    is an object of that name which ``CREATE VIRTUAL TABLE IF NOT EXISTS``
-    would skip while every read and write against it fails.
+    Both failures are repairable and both must be caught. An object of that
+    name which is not FTS5 makes every read and write against it fail, and
+    ``CREATE VIRTUAL TABLE IF NOT EXISTS`` would step over it forever. A
+    missing one is quieter and worse: the create would put back an empty
+    external-content table, and searches would then report no matches for
+    books that are still sitting in ``books``.
     """
     row = db.execute(
         "SELECT sql FROM sqlite_master WHERE name = 'books_fts'"
     ).fetchone()
     if row is None:
-        return True
+        return False
     return "fts5" in (row[0] or "").lower()
+
+
+def _stored_book_count(db: "Database") -> int:
+    """Number of rows in ``books``, or 0 if the table is not there yet."""
+    if "books" not in db.table_names():
+        return 0
+    return db.execute("SELECT count(*) FROM books").fetchone()[0]
 
 
 def _repopulate_fts(db: "Database") -> None:
