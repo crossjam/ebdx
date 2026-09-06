@@ -60,6 +60,24 @@ def _parse_pkg_metadata():
     return summary, repo_url
 
 
+def _open_database(database):
+    """Open ``database``, reporting an unusable file instead of raising.
+
+    Opening runs the schema check, which is itself SQLite work: a locked
+    file, a truncated file, or something that is not a database at all fails
+    here rather than at query time. Every command goes through this so none
+    of them can print a traceback for a bad database file.
+    """
+    from ebdx.db import get_database
+
+    try:
+        return get_database(str(database))
+    except sqlite3.DatabaseError as e:
+        console.print(f"[red]Cannot open database:[/red] {e}")
+        console.print(f"[yellow]Not a usable ebdx database: {database}[/yellow]")
+        raise click.Abort() from e
+
+
 def get_data_dir() -> Path:
     """Get the XDG compliant data directory for the app."""
     return Path(user_data_dir(APP_NAME, APP_AUTHOR))
@@ -155,7 +173,6 @@ def index(root: Path, database):
     Recursively scans ROOT for .epub files, extracts their metadata,
     and stores it in a SQLite database with FTS5 search support.
     """
-    from ebdx.db import get_database
     from ebdx.scanner import scan_and_index
 
     if database is None:
@@ -165,7 +182,7 @@ def index(root: Path, database):
     console.print(f"[cyan]Indexing EPUBs in:[/cyan] {root}")
     console.print(f"[cyan]Database:[/cyan] {database}")
 
-    db = get_database(str(database))
+    db = _open_database(database)
     stats = scan_and_index(root, db, console)
 
     console.print()
@@ -211,7 +228,7 @@ def search(query: str, database, limit: int):
         ebdx search "Dune"
         ebdx search "Asimov" --limit 10
     """
-    from ebdx.db import InvalidQueryError, get_database, search_books
+    from ebdx.db import InvalidQueryError, search_books
 
     if database is None:
         database = get_default_db_path()
@@ -223,21 +240,22 @@ def search(query: str, database, limit: int):
         )
         raise click.Abort()
 
-    db = get_database(str(database))
+    db = _open_database(database)
     try:
         results = search_books(db, query, limit=limit)
     except InvalidQueryError as e:
         console.print(f"[red]Invalid search query:[/red] {e}")
         raise click.Abort() from e
-    except sqlite3.OperationalError as e:
+    except sqlite3.DatabaseError as e:
         # search_books validates the query first, so reaching here means the
         # database cannot serve the search: a locked file, a corrupt index,
         # schema drift. Reported separately so it is never mistaken for the
-        # user mistyping a query.
+        # user mistyping a query. DatabaseError is the parent of
+        # OperationalError and also covers corruption reported directly.
         console.print(f"[red]Database error:[/red] {e}")
         console.print(
-            f"[yellow]The index at {database} may be damaged; re-run "
-            "'ebdx index <directory>' to rebuild it.[/yellow]"
+            f"[yellow]The database at {database} may be damaged; delete it "
+            "and re-run 'ebdx index <directory>' to rebuild.[/yellow]"
         )
         raise click.Abort() from e
 
@@ -280,8 +298,6 @@ def schema(database):
 
     Shows the tables and indexes in the ebdx SQLite database.
     """
-    from ebdx.db import get_database
-
     if database is None:
         database = get_default_db_path()
 
@@ -292,7 +308,7 @@ def schema(database):
         )
         return
 
-    db = get_database(str(database))
+    db = _open_database(database)
 
     from rich.table import Table
 

@@ -283,6 +283,56 @@ def test_valid_query_forms_are_accepted(tmp_path, good_query):
     search_books(db, good_query)  # must not raise
 
 
+def test_reopen_repairs_a_non_fts_books_fts_and_keeps_the_books(tmp_path):
+    """A books_fts replaced by an ordinary table is rebuilt on the next open,
+    with the book rows preserved and searchable again."""
+    db_path = tmp_path / "ebdx.db"
+    db = get_database(str(db_path))
+    save_book(db, _book(path="/library/dune.epub", title="Dune", author="Frank Herbert"))
+    db.execute("DROP TABLE books_fts")
+    db.execute("CREATE TABLE books_fts (rowid INTEGER, title TEXT)")
+    db.conn.commit()
+    db.conn.close()
+
+    reopened = get_database(str(db_path))
+
+    assert reopened["books"].count == 1  # book data survived the repair
+    assert [hit["title"] for hit in search_books(reopened, "Dune")] == ["Dune"]
+    assert [hit["author"] for hit in search_books(reopened, "Herbert")] == [
+        "Frank Herbert"
+    ]
+
+
+def test_repaired_index_still_tracks_later_writes(tmp_path):
+    """The rebuilt index must come back with its triggers, not just its rows."""
+    db_path = tmp_path / "ebdx.db"
+    db = get_database(str(db_path))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+    db.execute("DROP TABLE books_fts")
+    db.execute("CREATE TABLE books_fts (rowid INTEGER, title TEXT)")
+    db.conn.commit()
+    db.conn.close()
+
+    reopened = get_database(str(db_path))
+    save_book(reopened, _book(path="/library/foundation.epub", title="Foundation"))
+
+    assert [hit["title"] for hit in search_books(reopened, "Foundation")] == [
+        "Foundation"
+    ]
+
+
+def test_a_healthy_database_is_not_repaired(tmp_path):
+    """The repair must not fire on a sound database, which would double-index."""
+    db_path = tmp_path / "ebdx.db"
+    db = get_database(str(db_path))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+    db.conn.close()
+
+    reopened = get_database(str(db_path))
+
+    assert _match_count(reopened, "Dune") == 1
+
+
 def test_probe_columns_match_the_real_fts_table(tmp_path):
     """The validator's scratch table must carry the same columns as books_fts,
     or a valid column filter could be rejected (or a bad one accepted)."""

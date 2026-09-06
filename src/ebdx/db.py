@@ -94,6 +94,13 @@ def _ensure_schema(db: "Database") -> None:
     but already carrying a ``books`` table) is rebuilt from scratch rather
     than operated against; a database already at the current version keeps
     all of its data, since every create below is ``IF NOT EXISTS``.
+
+    A database stamped at the current version can still be structurally
+    broken -- most visibly a ``books_fts`` that is no longer an FTS5 table,
+    which every search and every indexing write fails against. Because the
+    creates below are ``IF NOT EXISTS`` they would step over such an object
+    forever, so it is dropped and rebuilt from ``books``. The book rows are
+    kept: only the derived index was broken, and it can be recomputed.
     """
     version = db.execute("PRAGMA user_version").fetchone()[0]
 
@@ -104,24 +111,75 @@ def _ensure_schema(db: "Database") -> None:
         )
         return
 
+    repairing_fts = False
     if version < SCHEMA_VERSION and "books" in db.table_names():
         logger.info(
             f"Rebuilding database schema: on-disk version {version}, "
             f"current version {SCHEMA_VERSION}"
         )
         _drop_schema(db)
+    elif not _fts_index_is_intact(db):
+        logger.warning(
+            "The books_fts search index is not an FTS5 table; rebuilding it "
+            "from the stored books"
+        )
+        _drop_fts(db)
+        repairing_fts = True
 
     _create_schema(db)
+
+    if repairing_fts:
+        _repopulate_fts(db)
 
     if version < SCHEMA_VERSION:
         db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
-def _drop_schema(db: "Database") -> None:
-    """Drop every ebdx-managed trigger, table, and index."""
+def _fts_index_is_intact(db: "Database") -> bool:
+    """True unless ``books_fts`` exists as something other than an FTS5 table.
+
+    An absent ``books_fts`` counts as intact -- a new or already-dropped
+    database -- because ``_create_schema`` will build it. What this catches
+    is an object of that name which ``CREATE VIRTUAL TABLE IF NOT EXISTS``
+    would skip while every read and write against it fails.
+    """
+    row = db.execute(
+        "SELECT sql FROM sqlite_master WHERE name = 'books_fts'"
+    ).fetchone()
+    if row is None:
+        return True
+    return "fts5" in (row[0] or "").lower()
+
+
+def _repopulate_fts(db: "Database") -> None:
+    """Refill ``books_fts`` from ``books`` after the index was rebuilt.
+
+    FTS5's own ``'rebuild'`` command is not usable here: it reads the
+    ``content=`` table directly, and ``books`` stores ``author_id`` rather
+    than the ``author`` text the index carries. This mirrors what the insert
+    trigger does, for every existing row.
+    """
+    db.execute(
+        """
+        INSERT INTO books_fts (rowid, title, author, series, tags)
+        SELECT b.id, b.title,
+               (SELECT name FROM authors WHERE id = b.author_id),
+               b.series, b.tags
+        FROM books b
+        """
+    )
+
+
+def _drop_fts(db: "Database") -> None:
+    """Drop the FTS index and its triggers, leaving book data untouched."""
     for trigger in _FTS_TRIGGERS:
         db.execute(f"DROP TRIGGER IF EXISTS {trigger}")
     db.execute("DROP TABLE IF EXISTS books_fts")
+
+
+def _drop_schema(db: "Database") -> None:
+    """Drop every ebdx-managed trigger, table, and index."""
+    _drop_fts(db)
     db["books"].drop(ignore=True)
     db["authors"].drop(ignore=True)
 

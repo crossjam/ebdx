@@ -151,11 +151,9 @@ def test_malformed_query_exits_nonzero_without_a_traceback(
     assert "Invalid search query" in result.output
 
 
-def test_a_damaged_index_reports_a_database_error_not_a_bad_query(
-    runner, tmp_path, make_epub
-):
-    """A corrupt books_fts must exit cleanly as a database fault, and must not
-    be presented to the user as a malformed query."""
+def test_a_damaged_search_index_is_repaired_on_open(runner, tmp_path, make_epub):
+    """A books_fts replaced by an ordinary table is rebuilt when the database
+    is next opened, so search works again without re-indexing."""
     db_path = _index_library(
         runner, tmp_path, make_epub, [{"title": "Dune", "author": "Frank Herbert"}]
     )
@@ -167,10 +165,46 @@ def test_a_damaged_index_reports_a_database_error_not_a_bad_query(
 
     result = runner.invoke(cli, ["search", "Dune", "--database", str(db_path)])
 
+    assert result.exit_code == 0, result.output
+    assert "Dune" in result.output
+
+
+def test_unrepairable_damage_reports_a_database_error_not_a_bad_query(
+    runner, tmp_path, make_epub
+):
+    """Schema drift the opener cannot repair must exit cleanly as a database
+    fault, never as a malformed query, and never as a traceback."""
+    db_path = _index_library(
+        runner, tmp_path, make_epub, [{"title": "Dune", "author": "Frank Herbert"}]
+    )
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE books DROP COLUMN series_index")
+    conn.commit()
+    conn.close()
+
+    result = runner.invoke(cli, ["search", "Dune", "--database", str(db_path)])
+
     assert result.exit_code != 0
     assert "Traceback" not in result.output
     assert "Database error" in result.output
     assert "Invalid search query" not in result.output
+
+
+def test_a_file_that_is_not_a_database_is_reported_cleanly(runner, tmp_path):
+    """Opening runs schema work, so a non-database file fails there; it must
+    not reach the user as a traceback."""
+    junk = tmp_path / "junk.db"
+    junk.write_text("this is not a sqlite database")
+
+    for argv in (
+        ["search", "Dune", "--database", str(junk)],
+        ["schema", "--database", str(junk)],
+        ["index", str(tmp_path), "--database", str(junk)],
+    ):
+        result = runner.invoke(cli, argv)
+        assert result.exit_code != 0, argv
+        assert "Traceback" not in result.output, argv
+        assert "Cannot open database" in result.output, argv
 
 
 # --- 5.4 discover and informational commands --------------------------------
