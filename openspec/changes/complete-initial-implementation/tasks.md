@@ -30,6 +30,6 @@
 
 ## 6. Cleanup and docs
 
-- [ ] 6.1 Remove the `hello()` stub from `src/ebdx/__init__.py` and verify `poe lint` and `poe test` pass with no reference to it remaining (`grep -r hello src tests` returns nothing)
-- [ ] 6.2 Write `README.md` with install, the six commands, a worked index-then-search example, and a note that `series` is not currently extracted; verify the example commands run as written against a fixture directory
-- [ ] 6.3 Run `poe qa` (lint, type, test) and confirm it passes clean
+- [x] 6.1 Remove the `hello()` stub from `src/ebdx/__init__.py` and verify `poe lint` and `poe test` pass with no reference to it remaining (`grep -r hello src tests` returns nothing)
+- [x] 6.2 Write `README.md` with install, the six commands, a worked index-then-search example, and a note that `series` is not currently extracted; verify the example commands run as written against a fixture directory
+- [x] 6.3 Run `poe qa` (lint, type, test) and confirm it passes clean

@@ -249,7 +249,7 @@ def test_search_results_carry_the_source_path(tmp_path):
         "a OR OR b",  # doubled operator
         "^",  # bare anchor
         "* ",  # unknown special query
-        "x.y:hello",  # dotted column filter
+        "x.y:Dune",  # dotted column filter
         "badcol:Dune",  # unknown column filter
         "{nope title}:Dune",  # unknown column in a braced filter
     ],

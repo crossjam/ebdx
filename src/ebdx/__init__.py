@@ -1,2 +1,1 @@
-def hello() -> str:
-    return "Hello from ebook-indexer!"
+"""ebdx — index EPUB metadata into a searchable SQLite database."""

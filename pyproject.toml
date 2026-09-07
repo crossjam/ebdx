@@ -89,6 +89,9 @@ dev = [
 [project.scripts]
 ebdx = "ebdx.cli:main"
 
+[project.urls]
+Repository = "https://github.com/crossjam/ebdx"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
