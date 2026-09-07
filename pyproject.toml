@@ -3,7 +3,7 @@ name = "ebdx"
 version = "0.1.0"
 description = "CLI tool to index EPUB metadata into a SQLite database"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = [
     "click>=8.1",
     "loguru>=0.7",
@@ -11,6 +11,7 @@ dependencies = [
     "ebooklib>=0.18",
     "beautifulsoup4>=4.12",
     "platformdirs>=4.0",
+    "sqlite-utils>=3.36",
 ]
 
 [tool.poe.tasks]
@@ -88,12 +89,15 @@ dev = [
 [project.scripts]
 ebdx = "ebdx.cli:main"
 
+[project.urls]
+Repository = "https://github.com/crossjam/ebdx"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py313"
 line-length = 100
 
 [tool.ruff.lint]
@@ -102,3 +106,17 @@ ignore = []
 
 [tool.ruff.lint.isort]
 known-first-party = ["ebdx"]
+
+[tool.ty]
+# Ty configuration - lenient settings for gradual type annotation adoption
+
+[tool.ty.rules]
+# Ignore certain rules to allow working with sqlite_utils types
+unresolved-import = "ignore"
+possibly-missing-attribute = "ignore"
+unsupported-operator = "ignore"
+invalid-parameter-default = "ignore"
+invalid-argument-type = "ignore"
+unresolved-attribute = "ignore"
+too-many-positional-arguments = "ignore"
+invalid-return-type = "ignore"
