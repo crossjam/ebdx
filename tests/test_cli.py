@@ -90,6 +90,38 @@ def test_verbose_and_quiet_together_is_a_usage_error(runner):
     assert "at most one" in result.output
 
 
+def test_quiet_suppresses_the_unreadable_file_warning(
+    runner, tmp_path, make_epub, make_corrupt_epub
+):
+    """--quiet hides the per-file warning but not the failure it counted."""
+    db_path = tmp_path / "ebdx.db"
+    make_epub("library/good.epub", title="Good", author="AA")
+    make_corrupt_epub("library/broken.epub")
+    args = ["index", str(tmp_path / "library"), "--database", str(db_path)]
+
+    loud = runner.invoke(cli, args)
+    assert loud.exit_code == 0, loud.output
+    assert "broken.epub" in loud.output
+
+    quiet = runner.invoke(cli, ["--quiet", *args])
+
+    assert quiet.exit_code == 0, quiet.output
+    assert "broken.epub" not in quiet.output
+    failed_row = next(line for line in quiet.output.splitlines() if "Failed" in line)
+    assert "1" in failed_row
+
+
+def test_quiet_still_prints_search_results(runner, tmp_path, make_epub):
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Dune", "author": "FH"}])
+
+    result = runner.invoke(
+        cli, ["--quiet", "search", "Dune", "--database", str(db_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Dune" in result.output
+
+
 # --- 5.2 table shape -------------------------------------------------------
 
 

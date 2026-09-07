@@ -11,6 +11,7 @@ carrying the source path.
 """
 
 import sqlite3
+from pathlib import Path
 
 import pytest
 import sqlite_utils
@@ -228,7 +229,36 @@ def test_save_book_accepts_a_path_object(tmp_path):
 
     saved = save_book(db, _book(path=epub_path))
 
-    assert db["books"].get(saved.id)["path"] == str(epub_path)
+    assert db["books"].get(saved.id)["path"] == str(epub_path.resolve())
+
+
+def test_relative_path_is_stored_absolute(tmp_path, monkeypatch):
+    db = get_database(str(tmp_path / "ebdx.db"))
+    (tmp_path / "library").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    saved = save_book(db, _book(path="library/dune.epub"))
+
+    stored = db["books"].get(saved.id)["path"]
+    assert Path(stored).is_absolute()
+    assert stored == str((tmp_path / "library" / "dune.epub").resolve())
+
+
+def test_relative_and_absolute_forms_are_one_book(tmp_path, monkeypatch):
+    """A path given both ways names one file, so it gets one record."""
+    db = get_database(str(tmp_path / "ebdx.db"))
+    (tmp_path / "library").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    first = save_book(db, _book(path="library/dune.epub", title="Draft"))
+    second = save_book(
+        db, _book(path=(tmp_path / "library" / "dune.epub").resolve(), title="Final")
+    )
+
+    assert second.id == first.id
+    assert second.created is False
+    assert db["books"].count == 1
+    assert db["books"].get(first.id)["title"] == "Final"
 
 
 def test_search_results_carry_the_source_path(tmp_path):

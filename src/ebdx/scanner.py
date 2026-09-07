@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import sqlite_utils
+from loguru import logger
 from rich.console import Console
 
 
@@ -70,9 +71,10 @@ def scan_and_index(
         try:
             metadata = extract_metadata(epub_path)
             if metadata is None:
-                console.print(
-                    f"[yellow]No metadata found for {epub_path.name}[/yellow]"
-                )
+                # A file this run could not read is a warning, not a result:
+                # it goes through the logger so --quiet suppresses it while
+                # the failure still shows up in the returned counts.
+                logger.warning(f"No metadata found for {epub_path}")
                 stats["failed"] += 1
                 continue
 
@@ -82,7 +84,7 @@ def scan_and_index(
             saved = save_book(db, metadata)
             stats["indexed" if saved.created else "updated"] += 1
         except Exception as e:
-            console.print(f"[red]Error processing {epub_path.name}: {e}[/red]")
+            logger.warning(f"Error processing {epub_path}: {e}")
             stats["failed"] += 1
 
     return stats

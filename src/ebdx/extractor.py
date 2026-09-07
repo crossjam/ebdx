@@ -77,5 +77,8 @@ def extract_metadata(epub_path: Path) -> dict | None:
         return metadata
 
     except Exception as e:
-        logger.error(f"Failed to extract metadata from {epub_path}: {e}")
+        # Callers recover from this by counting the file as failed and moving
+        # on, so it is a warning rather than an error -- which is what lets
+        # --quiet stay silent for an unreadable file.
+        logger.warning(f"Failed to extract metadata from {epub_path}: {e}")
         return None

@@ -300,6 +300,11 @@ def save_book(db: "Database", book_data: dict) -> SavedBook:
     already exists it is updated in place and keeps its id; otherwise a new
     row is inserted. The author is looked up or created by name.
 
+    The path is resolved to an absolute path before it is stored or looked
+    up, so a caller passing a relative path cannot create a second record for
+    a file that is already indexed under its absolute path, and stored paths
+    never depend on the working directory a run happened to start in.
+
     Args:
         db: The database connection.
         book_data: Book metadata. ``path`` is required and must be non-empty;
@@ -315,6 +320,7 @@ def save_book(db: "Database", book_data: dict) -> SavedBook:
     path = "" if raw_path is None else str(raw_path)
     if not path.strip():
         raise ValueError("save_book requires a non-empty 'path'")
+    path = str(Path(path).resolve())
 
     # lookup() is get-or-create, so an unknown name is inserted and its id
     # returned in one call.
