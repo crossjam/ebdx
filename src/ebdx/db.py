@@ -159,6 +159,52 @@ def _ensure_schema(db: "Database") -> None:
         db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
+class PlanMode(NamedTuple):
+    """How an index run would treat a database, and why."""
+
+    mode: str  # "compare" | "insert-all" | "fail-all" | "abort"
+    reason: str
+
+
+def plan_mode(db: "Database") -> PlanMode:
+    """Predict how a real index run would treat ``db``, without touching it.
+
+    Mirrors :func:`_ensure_schema` and :func:`save_book` between them:
+
+    - ``compare``: the schema is current and keyed by ``path``, so existing
+      rows say which files would be updated.
+    - ``insert-all``: a real open rebuilds the schema from scratch (recorded
+      below :data:`SCHEMA_VERSION`, or no ``books`` table yet), so every
+      readable file ends up inserted.
+    - ``abort``: the open itself fails. A ``books`` table at the current
+      version with no ``path`` column cannot have the current schema objects
+      built over it, so ``_ensure_schema`` raises and the command stops.
+    - ``fail-all``: the open succeeds but every write fails. Above the current
+      version ``_ensure_schema`` returns early and leaves the layout alone, so
+      ``save_book`` then fails once per file.
+
+    Keeping this in step with those two functions is what lets a dry run
+    promise only runs that could actually happen.
+    """
+    if "books" not in db.table_names():
+        return PlanMode("insert-all", "the books table would be created")
+
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    if version < SCHEMA_VERSION:
+        return PlanMode(
+            "insert-all",
+            f"the schema would be rebuilt from scratch (on-disk version {version})",
+        )
+
+    if "path" in db["books"].columns_dict:
+        return PlanMode("compare", "")
+
+    unusable = f"the books table has no 'path' column at schema version {version}"
+    if version == SCHEMA_VERSION:
+        return PlanMode("abort", unusable)
+    return PlanMode("fail-all", f"{unusable}, which is newer than this build expects")
+
+
 def describe_pending_schema_work(db: "Database") -> list[str]:
     """Say what :func:`_ensure_schema` would do to ``db``, without doing it.
 

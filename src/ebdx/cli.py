@@ -107,7 +107,7 @@ def _summary_table(title: str, rows: list[tuple[str, str]]):
 
 def _dry_run_index(root: Path, database, *, using_default: bool) -> None:
     """Report what ``index`` would do, touching neither disk nor database."""
-    from ebdx.db import describe_pending_schema_work
+    from ebdx.db import describe_pending_schema_work, plan_mode
     from ebdx.scanner import plan_index
 
     _dry_run_banner("planning an index run")
@@ -121,6 +121,15 @@ def _dry_run_index(root: Path, database, *, using_default: bool) -> None:
     db = None
     if Path(database).exists():
         db = _open_database(database, read_only=True)
+        predicted = plan_mode(db)
+        if predicted.mode == "abort":
+            # A real run stops while building the schema objects, so the dry
+            # run stops here rather than predicting inserts that cannot happen.
+            console.print(f"[red]Cannot index this database:[/red] {predicted.reason}")
+            console.print("[yellow]A real run would abort while creating the schema.[/yellow]")
+            raise click.Abort()
+        if predicted.mode == "fail-all":
+            console.print(f"[yellow]Every file would fail:[/yellow] {predicted.reason}")
         would_create.extend(describe_pending_schema_work(db))
     else:
         would_create.append(f"the database file {database}")

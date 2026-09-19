@@ -21,6 +21,7 @@ from ebdx.db import (
     SCHEMA_VERSION,
     InvalidQueryError,
     get_database,
+    plan_mode,
     save_book,
     search_books,
 )
@@ -560,3 +561,42 @@ def test_read_only_open_escapes_uri_significant_names(tmp_path, name):
     # ...and it is genuinely read-only.
     with pytest.raises(sqlite3.OperationalError, match="readonly"):
         ro.execute("UPDATE books SET title = 'Tampered'")
+
+
+def _path_less_books(db_path, version):
+    """A `books` table with no `path` column, stamped at `version`."""
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author_id INT)")
+    conn.execute(f"PRAGMA user_version = {version}")
+    conn.commit()
+    conn.close()
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        (0, "insert-all"),  # genuinely legacy: a real open rebuilds it
+        (SCHEMA_VERSION, "abort"),  # current version, unusable layout
+        (SCHEMA_VERSION + 1, "fail-all"),  # newer: left alone, every write fails
+    ],
+)
+def test_plan_mode_classifies_a_path_less_books_table(tmp_path, version, expected):
+    db_path = tmp_path / "odd.db"
+    _path_less_books(db_path, version)
+
+    assert plan_mode(get_database(str(db_path), read_only=True)).mode == expected
+
+
+def test_plan_mode_compares_against_a_current_database(tmp_path):
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+
+    assert plan_mode(db).mode == "compare"
+
+
+def test_plan_mode_treats_an_empty_database_as_all_inserts(tmp_path):
+    db_path = tmp_path / "empty.db"
+    sqlite3.connect(str(db_path)).close()
+
+    assert plan_mode(get_database(str(db_path), read_only=True)).mode == "insert-all"

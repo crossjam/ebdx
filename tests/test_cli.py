@@ -440,3 +440,27 @@ def test_dry_run_output_survives_quiet(runner, tmp_path, make_epub):
     assert result.exit_code == 0, result.output
     assert "DRY RUN" in result.output
     assert "Total found" in result.output
+
+
+def test_dry_run_index_aborts_where_a_real_run_would(runner, tmp_path, make_epub):
+    """A books table at the current version with no `path` cannot be indexed."""
+    make_epub("library/a.epub", title="A", author="AA")
+    db_path = tmp_path / "unusable.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author_id INT)")
+    conn.execute("PRAGMA user_version = 1")
+    conn.commit()
+    conn.close()
+
+    real = runner.invoke(cli, ["index", str(tmp_path / "library"), "--database", str(db_path)])
+    dry = runner.invoke(
+        cli, ["--dry-run", "index", str(tmp_path / "library"), "--database", str(db_path)]
+    )
+
+    # The real run aborts on open; the dry run must not promise inserts instead.
+    assert real.exit_code != 0
+    assert dry.exit_code != 0
+    assert "Cannot index this database" in dry.output
+    # No summary table at all: it stopped before counting, as the real run does.
+    assert not [line for line in dry.output.splitlines() if line.startswith("│")]

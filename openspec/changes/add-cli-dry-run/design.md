@@ -61,13 +61,26 @@ updated is answerable from the existing rows, which needs only read access, so t
 counts match what a real run would do. Extraction still happens — it is a read — so failure
 counts stay accurate rather than being guessed.
 
-Two database states have no `books.path` to read, and both must skip the lookup rather than
-query a column that is not there: one recorded below `SCHEMA_VERSION` with a `books` table,
-which a real open rebuilds from scratch, and a pre-path `books` table with no `path` column.
-In both, the real run ends up inserting every readable file, so classifying them all as
-would-be inserts is exactly what keeps the dry run's counts equal to the real run's — which
-a test asserts directly by comparing `plan_index` against `scan_and_index` on such a
-database.
+A missing `books.path` is not one situation but four, and they do not share an outcome, so
+`plan_mode` predicts which one applies by mirroring `_ensure_schema` and `save_book`
+between them:
+
+| database state | real run | dry run |
+| --- | --- | --- |
+| current version, keyed by `path` | compares against existing rows | `compare` |
+| below `SCHEMA_VERSION`, or no `books` yet | rebuilds, inserts everything | `insert-all` |
+| at `SCHEMA_VERSION`, `books` lacks `path` | aborts building the schema objects | `abort` |
+| above `SCHEMA_VERSION`, `books` lacks `path` | left alone; every write fails | `fail-all` |
+
+Collapsing the last two into `insert-all` — the first attempt — made the dry run promise
+successful inserts for runs that cannot succeed: verified that a real `index` against the
+third state aborts with "Not a usable ebdx database" and against the fourth reports every
+file failed. Tests assert `plan_index` equals `scan_and_index` for the rebuild and
+`fail-all` states, and that the dry run aborts without printing a summary for the `abort`
+state, so the prediction is pinned to the behavior rather than to my reading of it.
+
+Keeping `plan_mode` in step with `_ensure_schema` and `save_book` is the standing cost of
+this approach; its docstring says so, and the equality tests are what would catch a drift.
 
 ## Risks / Trade-offs
 

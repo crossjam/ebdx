@@ -6,7 +6,7 @@ database layer, covering the path the ``ebdx index`` command takes.
 
 import sqlite3
 
-from ebdx.db import get_database, search_books
+from ebdx.db import SCHEMA_VERSION, get_database, search_books
 from ebdx.scanner import iter_epub_files, iter_files, plan_index, scan_and_index
 
 
@@ -198,3 +198,23 @@ def test_plan_index_without_a_database_counts_every_file_as_new(tmp_path, make_e
     make_epub("library/a.epub", title="A", author="AA")
 
     assert plan_index(library, None) == {"total": 1, "indexed": 1, "updated": 0, "failed": 0}
+
+
+def test_plan_index_predicts_total_failure_on_a_newer_schema(tmp_path, make_epub):
+    """Above the current version the layout is left alone, so every write fails."""
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+    make_epub("library/b.epub", title="B", author="BB")
+    db_path = tmp_path / "newer.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author_id INT)")
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+    conn.commit()
+    conn.close()
+
+    planned = plan_index(library, get_database(str(db_path), read_only=True))
+    actual = scan_and_index(library, get_database(str(db_path)))
+
+    assert planned == {"total": 2, "indexed": 0, "updated": 0, "failed": 2}
+    assert planned == actual, "the dry run promised a different outcome than the real run"
