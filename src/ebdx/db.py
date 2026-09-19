@@ -38,6 +38,14 @@ _FTS_COLUMNS = ("title", "author", "series", "tags")
 # The books table as this build writes it. Single source of truth: the table is
 # created from this, and plan_mode checks an existing table against it, so a
 # layout missing any of these is recognised as one this build cannot write to.
+# The subset of _BOOKS_COLUMNS that opening the database touches: the unique
+# index is built on `path`, and the FTS triggers and the refill read `title`,
+# `author_id`, `series` and `tags`. A table missing one of these cannot have
+# the schema objects built over it, so the open itself fails. The rest are
+# written only by save_book, so a table missing those opens cleanly and then
+# fails once per file -- a different outcome the plan has to predict.
+_SCHEMA_INIT_COLUMNS = frozenset({"id", "path", "title", "author_id", "series", "tags"})
+
 _BOOKS_COLUMNS = {
     "id": int,
     "path": str,
@@ -227,13 +235,22 @@ def plan_mode(db: "Database") -> PlanMode:
     if not missing:
         return PlanMode("compare", "")
 
-    unusable = (
-        f"the books table is missing {', '.join(repr(m) for m in missing)} "
-        f"at schema version {version}"
-    )
-    if version == SCHEMA_VERSION:
+    named = ", ".join(repr(m) for m in missing)
+    unusable = f"the books table is missing {named} at schema version {version}"
+
+    if version > SCHEMA_VERSION:
+        # Above the current version the layout is left alone entirely, so the
+        # open cannot fail on it; only the writes do.
+        return PlanMode("fail-all", f"{unusable}, which is newer than this build expects")
+
+    if "path" in missing:
+        # The unique index on path is built on every open and cannot be.
         return PlanMode("abort", unusable)
-    return PlanMode("fail-all", f"{unusable}, which is newer than this build expects")
+    if not _SCHEMA_INIT_COLUMNS.isdisjoint(missing) and not _fts_index_is_intact(db):
+        # The FTS objects would be rebuilt and refilled, which reads these.
+        return PlanMode("abort", unusable)
+    # Everything the open touches is present; save_book is what fails.
+    return PlanMode("fail-all", unusable)
 
 
 def describe_pending_schema_work(db: "Database") -> list[str]:

@@ -300,3 +300,31 @@ def test_plan_index_refuses_an_unindexable_database_even_for_an_empty_library(tm
 
     with pytest.raises(UnindexableDatabaseError):
         plan_index(library, get_database(str(db_path), read_only=True))
+
+
+def _books_table(db_path, columns, version=SCHEMA_VERSION):
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute(f"CREATE TABLE books ({columns})")
+    conn.execute(f"PRAGMA user_version = {version}")
+    conn.commit()
+    conn.close()
+
+
+def test_plan_matches_real_run_when_only_write_columns_are_missing(tmp_path, make_epub):
+    """Opening touches path/title/author_id/series/tags; the rest only break writes."""
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+    make_epub("library/b.epub", title="B", author="BB")
+    schema = (
+        "id INTEGER PRIMARY KEY, path TEXT NOT NULL, title TEXT NOT NULL, "
+        "author_id INT, series TEXT, tags TEXT"
+    )
+    _books_table(tmp_path / "plan.db", schema)
+    _books_table(tmp_path / "real.db", schema)
+
+    planned = plan_index(library, get_database(str(tmp_path / "plan.db"), read_only=True))
+    actual = scan_and_index(library, get_database(str(tmp_path / "real.db")))
+
+    assert planned == {"total": 2, "indexed": 0, "updated": 0, "failed": 2}
+    assert planned == actual, "the plan disagreed with the run it predicted"
