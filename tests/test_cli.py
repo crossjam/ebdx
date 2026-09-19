@@ -693,3 +693,42 @@ def test_dry_run_search_reports_an_unrecognised_layout_that_would_open(runner, t
     assert "rebuild" in result.output
     # "whatever the query says": the unusable report wins over a bad query too.
     assert "Invalid search query" not in result.output
+
+
+@pytest.mark.parametrize("command", [["search", "Dune"], ["schema"]], ids=["search", "schema"])
+def test_dry_run_reading_commands_reject_an_unrecognised_structure(runner, tmp_path, command):
+    """Structure, not version: a newer database with missing columns is still unusable."""
+    db_path = tmp_path / "newmiss.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute(
+        "CREATE TABLE books (id INTEGER PRIMARY KEY, path TEXT NOT NULL, "
+        "title TEXT NOT NULL, author_id INT, series TEXT, tags TEXT)"
+    )
+    conn.execute("PRAGMA user_version = 99")
+    conn.commit()
+    conn.close()
+
+    result = runner.invoke(cli, ["--dry-run", *command, "--database", str(db_path)])
+
+    assert result.exit_code != 0
+    assert "Not a usable ebdx database" in result.output
+    assert "Database error" not in result.output
+
+
+def test_dry_run_index_reports_a_blocked_data_directory(runner, tmp_path, make_epub, monkeypatch):
+    """A real run cannot mkdir over a regular file, so the plan must not promise it."""
+    make_epub("library/a.epub", title="A", author="AA")
+    blocked = tmp_path / "datadir"
+    blocked.write_text("not a directory")
+    monkeypatch.setattr("ebdx.cli.user_data_dir", lambda *a, **k: str(blocked))
+
+    dry = runner.invoke(cli, ["--dry-run", "index", str(tmp_path / "library")])
+    real = runner.invoke(cli, ["index", str(tmp_path / "library")])
+
+    for result in (dry, real):
+        assert result.exit_code != 0
+        assert "Cannot create the data directory" in result.output
+        # Reported, not raised: no OSError escapes to the user.
+        assert not isinstance(result.exception, OSError)
+    assert blocked.read_text() == "not a directory"

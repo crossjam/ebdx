@@ -310,6 +310,27 @@ def _missing_schema_columns(db: "Database") -> dict[str, list[str]]:
     return missing
 
 
+def unrecognised_structure(db: "Database") -> str | None:
+    """Why this database's structure is not the one this build writes, or None.
+
+    Structure only -- the tables, their columns, and the unique index over
+    ``books.path``. Deliberately not the recorded version: a database at a
+    newer version with the expected structure is left alone by a real open and
+    still reads correctly, so reading commands may use it.
+    """
+    missing = _missing_schema_columns(db)
+    if missing:
+        version = db.execute("PRAGMA user_version").fetchone()[0]
+        described = " and ".join(
+            f"the {table} table is missing {', '.join(repr(c) for c in columns)}"
+            for table, columns in missing.items()
+        )
+        return f"{described} at schema version {version}"
+    if not _path_index_usable(db):
+        return "books.path holds duplicates, so the unique index on it cannot be created"
+    return None
+
+
 def would_fail_to_open(db: "Database") -> bool:
     """Whether a real open would fail on this database.
 

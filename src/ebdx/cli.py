@@ -124,6 +124,20 @@ def _summary_table(title: str, rows: list[tuple[str, str]]):
     return table
 
 
+def _reject_unrecognised(database, db) -> None:
+    """Stop a dry run whose database is not structurally the one this build writes.
+
+    Applied by the reading commands as well as `index`: the requirement is that
+    such a database is reported as unusable, whatever the command would
+    otherwise have failed on.
+    """
+    from ebdx.db import unrecognised_structure
+
+    reason = _inspect(database, unrecognised_structure, db)
+    if reason:
+        _report_unusable(database, reason)
+
+
 def _report_unusable(database, reason: str) -> None:
     """Report a layout this build does not write, and stop."""
     console.print(f"[red]Not a usable ebdx database:[/red] {reason}")
@@ -159,8 +173,12 @@ def _dry_run_index(root: Path, database, *, using_default: bool) -> None:
     console.print(f"[cyan]Database:[/cyan] {database}")
 
     would_do = []
-    if using_default and not get_data_dir().exists():
-        would_do.append(f"create the data directory {get_data_dir()}")
+    data_dir = get_data_dir()
+    if using_default and data_dir.exists() and not data_dir.is_dir():
+        console.print(f"[red]Cannot create the data directory:[/red] {data_dir} is not a directory")
+        raise click.Abort()
+    if using_default and not data_dir.exists():
+        would_do.append(f"create the data directory {data_dir}")
 
     # Only the default location is created for you. An explicit --database in a
     # directory that does not exist cannot be created by SQLite, so a real run
@@ -216,7 +234,12 @@ def _ensure_data_dir() -> Path:
     Call this only from commands that actually write to the data directory.
     """
     data_dir = get_data_dir()
-    data_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        # A file sitting where the directory belongs, or an unwritable parent.
+        console.print(f"[red]Cannot create the data directory:[/red] {data_dir}: {e}")
+        raise click.Abort() from e
     return data_dir
 
 
@@ -376,7 +399,7 @@ def search(ctx: click.Context, query: str, database, limit: int):
         ebdx search "Dune"
         ebdx search "Asimov" --limit 10
     """
-    from ebdx.db import InvalidQueryError, plan_mode, search_books, validate_query
+    from ebdx.db import InvalidQueryError, search_books, validate_query
 
     if database is None:
         database = get_default_db_path()
@@ -402,10 +425,7 @@ def search(ctx: click.Context, query: str, database, limit: int):
     # keep the two in the same order.
     _inspect(database, db.table_names)
     if dry_run:
-        from ebdx.db import would_fail_to_open
-
-        if _inspect(database, would_fail_to_open, db):
-            _report_unusable(database, _inspect(database, plan_mode, db).reason)
+        _reject_unrecognised(database, db)
 
     # Then the query: one that cannot be parsed is a query error whatever else
     # the database turns out to need, and it must be settled before the
@@ -509,6 +529,7 @@ def schema(ctx: click.Context, database):
 
     db = _open_database(database, read_only=dry_run)
     if dry_run:
+        _reject_unrecognised(database, db)
         _report_pending_work(db, database)
 
     from rich.table import Table
