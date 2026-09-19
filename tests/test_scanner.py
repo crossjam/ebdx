@@ -284,3 +284,19 @@ def test_unreadable_files_stay_warnings(tmp_path, make_epub, make_corrupt_epub):
     reported = [r for r in records if "broken.epub" in r["message"]]
     assert reported
     assert all(r["level"].name == "WARNING" for r in reported)
+
+
+def test_plan_index_refuses_an_unindexable_database_even_for_an_empty_library(tmp_path):
+    """An empty library must not turn an impossible run into a clean zero report."""
+    library = tmp_path / "empty"
+    library.mkdir()
+    db_path = tmp_path / "unusable.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author_id INT)")
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(UnindexableDatabaseError):
+        plan_index(library, get_database(str(db_path), read_only=True))

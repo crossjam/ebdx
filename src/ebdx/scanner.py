@@ -116,21 +116,15 @@ def plan_index(
     only way to know which files would fail; those counts are therefore
     accurate rather than guessed.
     """
+    from ebdx.db import UnindexableDatabaseError, plan_mode
     from ebdx.extractor import extract_metadata
 
     if console is None:
         console = Console()
 
-    epub_files = sorted(iter_epub_files(root))
-    console.print(f"[cyan]Found {len(epub_files)} EPUB file(s)[/cyan]")
-
-    stats = {"total": len(epub_files), "indexed": 0, "updated": 0, "failed": 0}
-
-    if not epub_files:
-        return stats
-
-    from ebdx.db import UnindexableDatabaseError, plan_mode
-
+    # Settled before the library is scanned. Whether this database can be
+    # indexed has nothing to do with how many files are in the library, and an
+    # empty library must not turn an impossible run into a clean zero report.
     if db is None:
         mode = "insert-all"
     else:
@@ -142,6 +136,14 @@ def plan_index(
             # this nicely; the raise is what protects every other caller.
             raise UnindexableDatabaseError(predicted.reason)
         mode = predicted.mode
+
+    epub_files = sorted(iter_epub_files(root))
+    console.print(f"[cyan]Found {len(epub_files)} EPUB file(s)[/cyan]")
+
+    stats = {"total": len(epub_files), "indexed": 0, "updated": 0, "failed": 0}
+
+    if not epub_files:
+        return stats
 
     known_paths: set[str] = set()
     if mode == "compare":
