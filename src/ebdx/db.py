@@ -35,6 +35,23 @@ _FTS_TRIGGERS = ("books_ai", "books_ad", "books_au")
 # These are plain identifiers written here, never caller input.
 _FTS_COLUMNS = ("title", "author", "series", "tags")
 
+# The books table as this build writes it. Single source of truth: the table is
+# created from this, and plan_mode checks an existing table against it, so a
+# layout missing any of these is recognised as one this build cannot write to.
+_BOOKS_COLUMNS = {
+    "id": int,
+    "path": str,
+    "title": str,
+    "author_id": int,
+    "series": str,
+    "series_index": float,
+    "publisher": str,
+    "published": str,
+    "isbn": str,
+    "language": str,
+    "tags": str,
+}
+
 
 def _validate_fts_query(query: str) -> None:
     """Raise :class:`InvalidQueryError` if FTS5 cannot parse ``query``.
@@ -205,10 +222,15 @@ def plan_mode(db: "Database") -> PlanMode:
             f"the schema would be rebuilt from scratch (on-disk version {version})",
         )
 
-    if "path" in db["books"].columns_dict:
+    present = set(db["books"].columns_dict)
+    missing = [name for name in _BOOKS_COLUMNS if name not in present]
+    if not missing:
         return PlanMode("compare", "")
 
-    unusable = f"the books table has no 'path' column at schema version {version}"
+    unusable = (
+        f"the books table is missing {', '.join(repr(m) for m in missing)} "
+        f"at schema version {version}"
+    )
     if version == SCHEMA_VERSION:
         return PlanMode("abort", unusable)
     return PlanMode("fail-all", f"{unusable}, which is newer than this build expects")
@@ -229,6 +251,8 @@ def describe_pending_schema_work(db: "Database") -> list[str]:
             f"rebuild the schema from scratch (on-disk version {version}, "
             f"current version {SCHEMA_VERSION}), discarding existing rows"
         ]
+    if "books" not in db.table_names():
+        return ["create the books, authors, and full-text schema"]
     if not _fts_index_is_intact(db):
         return [
             "rebuild the books_fts search index and refill it from "
@@ -310,19 +334,7 @@ def _create_schema(db: "Database") -> None:
     # external-content FTS5 index keys on it via content_rowid; `path` is the
     # stable identity used by the indexer and carries a unique index.
     db["books"].create(
-        {
-            "id": int,
-            "path": str,
-            "title": str,
-            "author_id": int,
-            "series": str,
-            "series_index": float,
-            "publisher": str,
-            "published": str,
-            "isbn": str,
-            "language": str,
-            "tags": str,
-        },
+        dict(_BOOKS_COLUMNS),
         pk="id",
         not_null=["title", "path"],
         foreign_keys=["author_id"],

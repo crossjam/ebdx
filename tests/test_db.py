@@ -20,6 +20,7 @@ from ebdx.db import (
     _FTS_COLUMNS,
     SCHEMA_VERSION,
     InvalidQueryError,
+    describe_pending_schema_work,
     get_database,
     plan_mode,
     save_book,
@@ -600,3 +601,32 @@ def test_plan_mode_treats_an_empty_database_as_all_inserts(tmp_path):
     sqlite3.connect(str(db_path)).close()
 
     assert plan_mode(get_database(str(db_path), read_only=True)).mode == "insert-all"
+
+
+def test_plan_mode_rejects_a_books_table_missing_writable_columns(tmp_path):
+    """`path` alone is not enough: save_book writes every column in the schema."""
+    db_path = tmp_path / "partial.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute(
+        "CREATE TABLE books "
+        "(id INTEGER PRIMARY KEY, path TEXT NOT NULL, title TEXT NOT NULL, author_id INT)"
+    )
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    conn.commit()
+    conn.close()
+
+    predicted = plan_mode(get_database(str(db_path), read_only=True))
+
+    assert predicted.mode == "abort"
+    assert "series_index" in predicted.reason
+
+
+def test_pending_schema_work_reports_creation_for_an_empty_file(tmp_path):
+    """An empty database file needs the whole schema, not an index repair."""
+    db_path = tmp_path / "empty.db"
+    sqlite3.connect(str(db_path)).close()
+
+    work = describe_pending_schema_work(get_database(str(db_path), read_only=True))
+
+    assert work == ["create the books, authors, and full-text schema"]

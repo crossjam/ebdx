@@ -114,9 +114,18 @@ def _dry_run_index(root: Path, database, *, using_default: bool) -> None:
     console.print(f"[cyan]Would index EPUBs in:[/cyan] {root}")
     console.print(f"[cyan]Database:[/cyan] {database}")
 
-    would_create = []
+    would_do = []
     if using_default and not get_data_dir().exists():
-        would_create.append(f"the data directory {get_data_dir()}")
+        would_do.append(f"create the data directory {get_data_dir()}")
+
+    # Only the default location is created for you. An explicit --database in a
+    # directory that does not exist cannot be created by SQLite, so a real run
+    # fails on open -- report that rather than a tidy creation plan.
+    parent = Path(database).parent
+    if not Path(database).exists() and not using_default and not parent.is_dir():
+        console.print(f"[red]Cannot index this database:[/red] {parent} does not exist")
+        console.print("[yellow]A real run would fail to open the database file.[/yellow]")
+        raise click.Abort()
 
     db = None
     if Path(database).exists():
@@ -130,13 +139,13 @@ def _dry_run_index(root: Path, database, *, using_default: bool) -> None:
             raise click.Abort()
         if predicted.mode == "fail-all":
             console.print(f"[yellow]Every file would fail:[/yellow] {predicted.reason}")
-        would_create.extend(describe_pending_schema_work(db))
+        would_do.extend(describe_pending_schema_work(db))
     else:
-        would_create.append(f"the database file {database}")
-        would_create.append("the books, authors, and full-text schema")
+        would_do.append(f"create the database file {database}")
+        would_do.append("create the books, authors, and full-text schema")
 
-    for item in would_create:
-        console.print(f"[yellow]Would create:[/yellow] {item}")
+    for item in would_do:
+        console.print(f"[yellow]Would:[/yellow] {item}")
 
     stats = plan_index(root, db, console)
 

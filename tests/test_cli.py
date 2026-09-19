@@ -302,14 +302,15 @@ def _break_fts(db_path, *, replace: bool = False):
         conn.close()
 
 
-def test_dry_run_index_creates_nothing_where_nothing_existed(runner, tmp_path, make_epub):
+def test_dry_run_index_creates_nothing_where_nothing_existed(
+    runner, tmp_path, make_epub, monkeypatch
+):
+    """The default location is the one a real run would create, so it is the one to test."""
     make_epub("library/a.epub", title="A", author="AA")
     data_dir = tmp_path / "xdg"
-    db_path = data_dir / "ebdx.db"
+    monkeypatch.setattr("ebdx.cli.user_data_dir", lambda *a, **k: str(data_dir))
 
-    result = runner.invoke(
-        cli, ["--dry-run", "index", str(tmp_path / "library"), "--database", str(db_path)]
-    )
+    result = runner.invoke(cli, ["--dry-run", "index", str(tmp_path / "library")])
 
     assert result.exit_code == 0, result.output
     assert not data_dir.exists()
@@ -317,7 +318,7 @@ def test_dry_run_index_creates_nothing_where_nothing_existed(runner, tmp_path, m
     written = {p.name for p in iter_files(tmp_path)}
     assert written == {"a.epub"}
     assert "DRY RUN" in result.output
-    assert "Would create" in result.output
+    assert f"create the data directory {data_dir}" in result.output.replace("\n", "")
 
 
 def test_dry_run_index_leaves_an_existing_database_untouched(runner, tmp_path, make_epub):
@@ -464,3 +465,20 @@ def test_dry_run_index_aborts_where_a_real_run_would(runner, tmp_path, make_epub
     assert "Cannot index this database" in dry.output
     # No summary table at all: it stopped before counting, as the real run does.
     assert not [line for line in dry.output.splitlines() if line.startswith("│")]
+
+
+def test_dry_run_index_refuses_a_database_in_a_missing_directory(runner, tmp_path, make_epub):
+    """Only the default location is created for you; an explicit path is not."""
+    make_epub("library/a.epub", title="A", author="AA")
+    db_path = tmp_path / "no-such-dir" / "ebdx.db"
+
+    real = runner.invoke(cli, ["index", str(tmp_path / "library"), "--database", str(db_path)])
+    dry = runner.invoke(
+        cli, ["--dry-run", "index", str(tmp_path / "library"), "--database", str(db_path)]
+    )
+
+    assert real.exit_code != 0
+    assert dry.exit_code != 0
+    assert "Cannot index this database" in dry.output
+    assert not [line for line in dry.output.splitlines() if line.startswith("│")]
+    assert not db_path.parent.exists()
