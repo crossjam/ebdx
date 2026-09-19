@@ -35,22 +35,13 @@ _FTS_TRIGGERS = ("books_ai", "books_ad", "books_au")
 # These are plain identifiers written here, never caller input.
 _FTS_COLUMNS = ("title", "author", "series", "tags")
 
+# The authors table as this build writes it. `name` is read by the FTS triggers
+# and written by save_book's author lookup.
+_AUTHORS_COLUMNS = {"id": int, "name": str}
+
 # The books table as this build writes it. Single source of truth: the table is
 # created from this, and plan_mode checks an existing table against it, so a
 # layout missing any of these is recognised as one this build cannot write to.
-# The subset of _BOOKS_COLUMNS that opening the database touches: the unique
-# index is built on `path`, and the FTS triggers and the refill read `title`,
-# `author_id`, `series` and `tags`. A table missing one of these cannot have
-# the schema objects built over it, so the open itself fails. The rest are
-# written only by save_book, so a table missing those opens cleanly and then
-# fails once per file -- a different outcome the plan has to predict.
-# The authors table as this build uses it. `name` is read by the FTS triggers
-# and the refill, and written by save_book's author lookup, so a table without
-# it breaks both the open and the writes.
-_AUTHORS_COLUMNS = {"id": int, "name": str}
-
-_SCHEMA_INIT_COLUMNS = frozenset({"id", "path", "title", "author_id", "series", "tags"})
-
 _BOOKS_COLUMNS = {
     "id": int,
     "path": str,
@@ -208,68 +199,65 @@ class PlanMode(NamedTuple):
 def plan_mode(db: "Database") -> PlanMode:
     """Predict how a real index run would treat ``db``, without touching it.
 
-    Mirrors :func:`_ensure_schema` and :func:`save_book` between them:
+    Three outcomes, and deliberately no more:
 
-    - ``compare``: the schema is current and keyed by ``path``, so existing
-      rows say which files would be updated.
-    - ``insert-all``: a real open rebuilds the schema from scratch (recorded
-      below :data:`SCHEMA_VERSION`, or no ``books`` table yet), so every
+    - ``compare``: the layout is the one this build writes, so existing rows
+      say which files would be updated.
+    - ``insert-all``: a real open rebuilds the schema from scratch -- recorded
+      below :data:`SCHEMA_VERSION`, or with no ``books`` table yet -- so every
       readable file ends up inserted.
-    - ``abort``: the open itself fails. A ``books`` table at the current
-      version with no ``path`` column cannot have the current schema objects
-      built over it, so ``_ensure_schema`` raises and the command stops.
-    - ``fail-all``: the open succeeds but every write fails. Above the current
-      version ``_ensure_schema`` returns early and leaves the layout alone, so
-      ``save_book`` then fails once per file.
+    - ``unusable``: the layout is not one this build recognises. No counts are
+      predicted for it.
 
-    Keeping this in step with those two functions is what lets a dry run
-    promise only runs that could actually happen.
+    The last case is a deliberate limit. Predicting what a damaged or foreign
+    layout would do means reproducing every branch of :func:`_ensure_schema`
+    and :func:`save_book` here, and any corner missed is a dry run that
+    promises a run which cannot happen -- which is worse than declining to
+    guess. Since a damaged library is cheap to rebuild by re-indexing, the
+    useful answer is to say so rather than to model the failure.
     """
-    if "books" not in db.table_names():
-        return PlanMode("insert-all", "the books table would be created")
+    if "books" not in db.table_names() and "authors" not in db.table_names():
+        return PlanMode("insert-all", "the books and authors tables would be created")
 
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    if version < SCHEMA_VERSION:
+
+    if version < SCHEMA_VERSION and "books" in db.table_names():
         return PlanMode(
             "insert-all",
             f"the schema would be rebuilt from scratch (on-disk version {version})",
         )
 
-    books_missing = [n for n in _BOOKS_COLUMNS if n not in set(db["books"].columns_dict)]
-    authors_missing = _missing_authors_columns(db)
-    if not books_missing and not authors_missing:
+    missing = _missing_schema_columns(db)
+    if not missing:
+        if version > SCHEMA_VERSION:
+            return PlanMode(
+                "unusable",
+                f"the on-disk schema version {version} is newer than this build "
+                f"expects ({SCHEMA_VERSION})",
+            )
         return PlanMode("compare", "")
 
-    parts = []
-    if books_missing:
-        parts.append(f"the books table is missing {', '.join(repr(m) for m in books_missing)}")
-    if authors_missing:
-        parts.append(f"the authors table is missing {', '.join(repr(m) for m in authors_missing)}")
-    unusable = f"{' and '.join(parts)} at schema version {version}"
-
-    if version > SCHEMA_VERSION:
-        # Above the current version the layout is left alone entirely, so the
-        # open cannot fail on it; only the writes do.
-        return PlanMode("fail-all", f"{unusable}, which is newer than this build expects")
-
-    if "path" in books_missing:
-        # The unique index on path is built on every open and cannot be.
-        return PlanMode("abort", unusable)
-    touches_open = not _SCHEMA_INIT_COLUMNS.isdisjoint(books_missing) or bool(authors_missing)
-    if touches_open and not _fts_index_is_intact(db):
-        # The FTS objects would be rebuilt and refilled, which reads these
-        # columns -- including authors.name, through the trigger subquery.
-        return PlanMode("abort", unusable)
-    # Everything the open touches is present; save_book is what fails.
-    return PlanMode("fail-all", unusable)
+    described = " and ".join(
+        f"the {table} table is missing {', '.join(repr(c) for c in columns)}"
+        for table, columns in missing.items()
+    )
+    return PlanMode("unusable", f"{described} at schema version {version}")
 
 
-def _missing_authors_columns(db: "Database") -> list[str]:
-    """Columns ``authors`` needs but does not have. Empty if it does not exist yet."""
-    if "authors" not in db.table_names():
-        return []  # a real open creates it
-    present = set(db["authors"].columns_dict)
-    return [name for name in _AUTHORS_COLUMNS if name not in present]
+def _missing_schema_columns(db: "Database") -> dict[str, list[str]]:
+    """Columns the books and authors tables need but do not have, by table.
+
+    An absent table is not missing columns: a real open creates it whole.
+    """
+    missing = {}
+    for table, expected in (("books", _BOOKS_COLUMNS), ("authors", _AUTHORS_COLUMNS)):
+        if table not in db.table_names():
+            continue
+        present = set(db[table].columns_dict)
+        absent = [name for name in expected if name not in present]
+        if absent:
+            missing[table] = absent
+    return missing
 
 
 def describe_pending_schema_work(db: "Database") -> list[str]:

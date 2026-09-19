@@ -129,11 +129,11 @@ def plan_index(
         mode = "insert-all"
     else:
         predicted = plan_mode(db)
-        if predicted.mode == "abort":
-            # scan_and_index cannot begin against this database, so there are
-            # no counts to report -- returning any would describe a run that
-            # cannot happen. The CLI checks the mode first so it can render
-            # this nicely; the raise is what protects every other caller.
+        if predicted.mode == "unusable":
+            # Not a layout this build writes, so no counts are predicted for
+            # it -- see plan_mode. The CLI checks the mode first so it can
+            # render this nicely; the raise is what protects every other
+            # caller from a number that was never meant to be trusted.
             raise UnindexableDatabaseError(predicted.reason)
         mode = predicted.mode
 
@@ -154,12 +154,6 @@ def plan_index(
             metadata = extract_metadata(epub_path)
             if metadata is None:
                 logger.warning(f"No metadata found for {epub_path}")
-                stats["failed"] += 1
-                continue
-            if mode == "fail-all":
-                # The open would succeed but every write would fail, so
-                # promising an insert here would promise a run that cannot
-                # happen.
                 stats["failed"] += 1
                 continue
             # save_book resolves before keying, so classify against the same form.

@@ -141,14 +141,16 @@ def _dry_run_index(root: Path, database, *, using_default: bool) -> None:
     if Path(database).exists():
         db = _open_database(database, read_only=True)
         predicted = plan_mode(db)
-        if predicted.mode == "abort":
-            # A real run stops while building the schema objects, so the dry
-            # run stops here rather than predicting inserts that cannot happen.
-            console.print(f"[red]Cannot index this database:[/red] {predicted.reason}")
-            console.print("[yellow]A real run would abort while creating the schema.[/yellow]")
+        if predicted.mode == "unusable":
+            # Not a layout this build writes, so what a real run would do
+            # cannot be predicted without reproducing the whole schema-setup
+            # and write paths here. Say what is wrong instead of guessing.
+            console.print(f"[red]Not a usable ebdx database:[/red] {predicted.reason}")
+            console.print(
+                f"[yellow]Delete {database} and run 'ebdx index <directory>' "
+                "to rebuild it.[/yellow]"
+            )
             raise click.Abort()
-        if predicted.mode == "fail-all":
-            console.print(f"[yellow]Every file would fail:[/yellow] {predicted.reason}")
         would_do.extend(describe_pending_schema_work(db))
     else:
         would_do.append(f"create the database file {database}")

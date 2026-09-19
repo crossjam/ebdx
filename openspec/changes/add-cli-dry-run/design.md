@@ -61,26 +61,29 @@ updated is answerable from the existing rows, which needs only read access, so t
 counts match what a real run would do. Extraction still happens — it is a read — so failure
 counts stay accurate rather than being guessed.
 
-A missing `books.path` is not one situation but four, and they do not share an outcome, so
-`plan_mode` predicts which one applies by mirroring `_ensure_schema` and `save_book`
-between them:
+A dry run predicts exactly for databases this tool wrote, and declines to predict for
+anything else. `plan_mode` answers one of three things:
 
-| database state | real run | dry run |
+| database state | real run | plan |
 | --- | --- | --- |
-| current version, keyed by `path` | compares against existing rows | `compare` |
-| below `SCHEMA_VERSION`, or no `books` yet | rebuilds, inserts everything | `insert-all` |
-| at `SCHEMA_VERSION`, `books` lacks `path` | aborts building the schema objects | `abort` |
-| above `SCHEMA_VERSION`, `books` lacks `path` | left alone; every write fails | `fail-all` |
+| the layout this build writes | compares against existing rows | `compare` |
+| below `SCHEMA_VERSION`, or no tables yet | rebuilds, inserts everything | `insert-all` |
+| any other layout | fails, in ways that depend on what is damaged | `unusable` |
 
-Collapsing the last two into `insert-all` — the first attempt — made the dry run promise
-successful inserts for runs that cannot succeed: verified that a real `index` against the
-third state aborts with "Not a usable ebdx database" and against the fourth reports every
-file failed. Tests assert `plan_index` equals `scan_and_index` for the rebuild and
-`fail-all` states, and that the dry run aborts without printing a summary for the `abort`
-state, so the prediction is pinned to the behavior rather than to my reading of it.
+The third row is a deliberate limit rather than a gap. An earlier attempt predicted the
+failure mode too — distinguishing an open that aborts from one that succeeds and then fails
+every write — and review found four further states it still got wrong (a newer version with
+triggers but no FTS table, a missing unique path index with duplicate paths, absent
+triggers, and combinations). Each fix made `plan_mode` a fuller copy of `_ensure_schema`,
+and the supply of states is unbounded, since any subset of tables, columns, indexes and
+triggers can be absent. A copy of every branch is a copy that drifts, and a missed corner
+is a dry run promising a run that cannot happen — worse than declining to guess.
 
-Keeping `plan_mode` in step with `_ensure_schema` and `save_book` is the standing cost of
-this approach; its docstring says so, and the equality tests are what would catch a drift.
+So the tool checks whether the layout is the one it writes, and when it is not, says what is
+wrong and points at rebuilding. That is cheap here: a library is re-indexed from the EPUBs
+on disk, and nothing in the database is authored by hand. Rejected alternative: planning
+against a temporary copy of the database, which would make the prediction exact by
+construction but pays a full file copy on every dry run.
 
 ## Risks / Trade-offs
 

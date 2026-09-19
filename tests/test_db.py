@@ -578,8 +578,8 @@ def _path_less_books(db_path, version):
     ("version", "expected"),
     [
         (0, "insert-all"),  # genuinely legacy: a real open rebuilds it
-        (SCHEMA_VERSION, "abort"),  # current version, unusable layout
-        (SCHEMA_VERSION + 1, "fail-all"),  # newer: left alone, every write fails
+        (SCHEMA_VERSION, "unusable"),  # current version, layout we do not write
+        (SCHEMA_VERSION + 1, "unusable"),  # newer than this build understands
     ],
 )
 def test_plan_mode_classifies_a_path_less_books_table(tmp_path, version, expected):
@@ -618,7 +618,7 @@ def test_plan_mode_rejects_a_books_table_missing_writable_columns(tmp_path):
 
     predicted = plan_mode(get_database(str(db_path), read_only=True))
 
-    assert predicted.mode == "abort"
+    assert predicted.mode == "unusable"
     assert "series_index" in predicted.reason
 
 

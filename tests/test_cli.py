@@ -443,8 +443,8 @@ def test_dry_run_output_survives_quiet(runner, tmp_path, make_epub):
     assert "Total found" in result.output
 
 
-def test_dry_run_index_aborts_where_a_real_run_would(runner, tmp_path, make_epub):
-    """A books table at the current version with no `path` cannot be indexed."""
+def test_dry_run_index_declines_an_unrecognised_layout(runner, tmp_path, make_epub):
+    """A books table this build did not write gets a rebuild instruction, not a plan."""
     make_epub("library/a.epub", title="A", author="AA")
     db_path = tmp_path / "unusable.db"
     conn = sqlite3.connect(str(db_path))
@@ -462,8 +462,9 @@ def test_dry_run_index_aborts_where_a_real_run_would(runner, tmp_path, make_epub
     # The real run aborts on open; the dry run must not promise inserts instead.
     assert real.exit_code != 0
     assert dry.exit_code != 0
-    assert "Cannot index this database" in dry.output
-    # No summary table at all: it stopped before counting, as the real run does.
+    assert "Not a usable ebdx database" in dry.output
+    assert "rebuild" in dry.output
+    # No summary table at all: it declines to predict rather than guessing.
     assert not [line for line in dry.output.splitlines() if line.startswith("│")]
 
 

@@ -65,6 +65,33 @@ stays byte-identical so it remains usable in a pipeline.
   cannot be read
 - **THEN** that file is counted as failed, because determining it requires only reading
 
+### Requirement: Prediction is exact for databases the tool produced
+
+A dry run SHALL report the counts a real run would produce for any database this tool
+wrote — at the current layout, or at an earlier one it knows how to rebuild. It SHALL NOT
+attempt to predict the outcome for a layout it does not recognise, since doing so would
+require reproducing the whole of the schema-setup and write paths and would drift from
+them. Such a database SHALL instead be reported as unusable, naming what is wrong and
+directing the user to rebuild it, and the command SHALL exit non-zero.
+
+#### Scenario: A current library is predicted exactly
+
+- **WHEN** `index` is run with the dry-run option against a database this tool wrote
+- **THEN** the reported counts equal those of the equivalent real run
+
+#### Scenario: An earlier layout is predicted exactly
+
+- **WHEN** `index` is run with the dry-run option against a database recorded at an
+  earlier layout, which a real run rebuilds from scratch
+- **THEN** every readable file is reported as a would-be insert, matching the real run
+
+#### Scenario: An unrecognised layout is reported, not predicted
+
+- **WHEN** `index` is run with the dry-run option against a database whose tables are not
+  the ones this tool writes
+- **THEN** no counts are reported, the output names what is wrong, it directs the user to
+  rebuild the database, and the exit status is non-zero
+
 #### Scenario: Output is labelled
 
 - **WHEN** a command that would otherwise create or modify the data directory, the database
