@@ -392,9 +392,15 @@ def search(ctx: click.Context, query: str, database, limit: int):
 
     db = _open_database(database, read_only=dry_run)
 
-    # Settled before anything the dry run might report: a query that cannot be
-    # parsed is a query error whatever state the database is in, and a real
-    # search would say so too.
+    # A real search opens the database before it looks at the query, so an
+    # unreadable file is reported ahead of an unparseable query. A read-only
+    # open defers that discovery to the first query, so touch the file here to
+    # keep the two in the same order.
+    _inspect(database, db.table_names)
+
+    # Then the query: one that cannot be parsed is a query error whatever else
+    # the database turns out to need, and it must be settled before the
+    # dry-run reporting below.
     try:
         validate_query(query)
     except InvalidQueryError as e:

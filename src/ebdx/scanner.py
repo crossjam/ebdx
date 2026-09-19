@@ -159,6 +159,10 @@ def plan_index(
             # save_book resolves before keying, so classify against the same form.
             resolved = str(epub_path.resolve())
             stats["updated" if resolved in known_paths else "indexed"] += 1
+            # Counted as known from here on: a real run has written this path
+            # by now, so a later file resolving to it -- a symlink beside its
+            # target, say -- is an update rather than a second insert.
+            known_paths.add(resolved)
         except Exception as e:
             logger.warning(f"Error processing {epub_path}: {e}")
             stats["failed"] += 1

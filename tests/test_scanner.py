@@ -318,3 +318,16 @@ def test_unreadable_files_stay_warnings(tmp_path, make_corrupt_epub):
     reported = [r for r in records if "broken.epub" in r["message"]]
     assert reported
     assert all(r["level"].name == "WARNING" for r in reported)
+
+
+def test_plan_counts_a_symlink_to_an_indexed_file_as_an_update(tmp_path, make_epub):
+    """Both resolve to one path, so a real run inserts once and updates once."""
+    library = tmp_path / "library"
+    make_epub("library/real.epub", title="Real", author="AA")
+    (library / "link.epub").symlink_to(library / "real.epub")
+
+    planned = plan_index(library, None)
+    actual = scan_and_index(library, get_database(str(tmp_path / "ebdx.db")))
+
+    assert planned == {"total": 2, "indexed": 1, "updated": 1, "failed": 0}
+    assert planned == actual

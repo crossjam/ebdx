@@ -608,3 +608,18 @@ def test_dry_run_reports_a_corrupt_file_without_a_traceback(runner, tmp_path, ma
     assert "Cannot open database" in result.output
     assert "Traceback" not in result.output
     assert not isinstance(result.exception, sqlite3.DatabaseError)
+
+
+def test_dry_run_search_reports_a_bad_file_ahead_of_a_bad_query(runner, tmp_path):
+    """A real search opens the database before it looks at the query."""
+    db_path = tmp_path / "garbage.db"
+    db_path.write_bytes(b"\x00\x01\x02not a database at all" * 64)
+    args = ["search", 'broken"(', "--database", str(db_path)]
+
+    dry = runner.invoke(cli, ["--dry-run", *args])
+    real = runner.invoke(cli, args)
+
+    for result in (dry, real):
+        assert result.exit_code != 0
+        assert "Cannot open database" in result.output
+        assert "Invalid search query" not in result.output
