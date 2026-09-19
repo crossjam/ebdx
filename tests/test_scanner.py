@@ -4,8 +4,10 @@ These exercise ``scan_and_index`` against generated EPUBs and the real
 database layer, covering the path the ``ebdx index`` command takes.
 """
 
+import sqlite3
+
 from ebdx.db import get_database, search_books
-from ebdx.scanner import iter_epub_files, iter_files, scan_and_index
+from ebdx.scanner import iter_epub_files, iter_files, plan_index, scan_and_index
 
 
 def test_scan_and_index_stores_an_extracted_epub(tmp_path, make_epub):
@@ -154,3 +156,45 @@ def test_iter_files_does_not_follow_directory_symlink_loops(tmp_path):
     names = [p.name for p in iter_files(tmp_path)]
 
     assert names == ["book.epub"]
+
+
+def _legacy_database(db_path):
+    """A pre-path database: `books` exists but has no `path` column, version 0."""
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author_id INT)")
+    conn.execute("INSERT INTO books (title, author_id) VALUES ('Stale', 1)")
+    conn.commit()
+    conn.close()
+
+
+def test_plan_index_handles_a_pre_path_database(tmp_path, make_epub):
+    """A real run rebuilds that schema and inserts everything, so the plan says so."""
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+    make_epub("library/b.epub", title="B", author="BB")
+    db_path = tmp_path / "legacy.db"
+    _legacy_database(db_path)
+
+    stats = plan_index(library, get_database(str(db_path), read_only=True))
+
+    assert stats == {"total": 2, "indexed": 2, "updated": 0, "failed": 0}
+
+
+def test_plan_index_matches_a_real_run_on_a_pre_path_database(tmp_path, make_epub):
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+    db_path = tmp_path / "legacy.db"
+    _legacy_database(db_path)
+
+    planned = plan_index(library, get_database(str(db_path), read_only=True))
+    actual = scan_and_index(library, get_database(str(db_path)))
+
+    assert planned == actual
+
+
+def test_plan_index_without_a_database_counts_every_file_as_new(tmp_path, make_epub):
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+
+    assert plan_index(library, None) == {"total": 1, "indexed": 1, "updated": 0, "failed": 0}

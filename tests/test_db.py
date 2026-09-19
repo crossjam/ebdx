@@ -543,3 +543,20 @@ def test_read_only_open_of_a_missing_file_raises(tmp_path):
     """Documented failure mode: a read-only connection cannot create the file."""
     with pytest.raises(sqlite3.OperationalError):
         get_database(str(tmp_path / "nope.db"), read_only=True).table_names()
+
+
+@pytest.mark.parametrize("name", ["lib?x.db", "lib#y.db", "lib%z.db", "lib x.db"])
+def test_read_only_open_escapes_uri_significant_names(tmp_path, name):
+    """A "?" in the path must not truncate the URI and drop mode=ro."""
+    db_path = tmp_path / name
+    db = get_database(str(db_path))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+    db.conn.close()
+
+    ro = get_database(str(db_path), read_only=True)
+
+    # It opened the intended file, not a truncated-path neighbour...
+    assert [hit["title"] for hit in search_books(ro, "Dune")] == ["Dune"]
+    # ...and it is genuinely read-only.
+    with pytest.raises(sqlite3.OperationalError, match="readonly"):
+        ro.execute("UPDATE books SET title = 'Tampered'")

@@ -92,7 +92,11 @@ def get_database(db_path: str | Path, *, read_only: bool = False) -> "Database":
     logger.info(f"Opening database{' read-only' if read_only else ''}: {db_path}")
 
     if read_only:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        # as_uri() percent-escapes the path. Interpolating it raw would let a
+        # filename containing "?", "#" or "%" be parsed as URI syntax -- a "?"
+        # in particular truncates the path and drops mode=ro, silently handing
+        # back a writable connection to a different file.
+        conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
         return sqlite_utils.Database(conn)
 
     db = sqlite_utils.Database(str(db_path))

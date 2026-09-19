@@ -90,6 +90,25 @@ def scan_and_index(
     return stats
 
 
+def _classifiable(db: sqlite_utils.Database) -> bool:
+    """Whether existing rows can be used to classify what an index run would do.
+
+    False for a database a real run would rebuild from scratch, and for a
+    pre-path ``books`` table with no ``path`` column to key on. In both cases
+    the real run ends up inserting every readable file, so treating them all as
+    would-be inserts is what makes the dry run's counts match it -- and it
+    avoids selecting a column that is not there.
+    """
+    from ebdx.db import SCHEMA_VERSION
+
+    if "books" not in db.table_names():
+        return False
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    if version < SCHEMA_VERSION:
+        return False  # a real open would drop and recreate the schema
+    return "path" in db["books"].columns_dict
+
+
 def plan_index(
     root: Path,
     db: sqlite_utils.Database | None,
@@ -119,7 +138,7 @@ def plan_index(
         return stats
 
     known_paths: set[str] = set()
-    if db is not None and "books" in db.table_names():
+    if db is not None and _classifiable(db):
         known_paths = {row[0] for row in db.execute("SELECT path FROM books")}
 
     for epub_path in epub_files:

@@ -44,8 +44,12 @@ when both are given, and the codebase already asks the user to put `-v`/`-q` in 
 position. The ordering is documented in the option's help text instead.
 
 **`get_database(path, read_only=True)` does both halves.** It skips `_ensure_schema` *and*
-opens through `sqlite3.connect(f"file:{path}?mode=ro", uri=True)`, handing the resulting
-connection to `sqlite_utils.Database`. Skipping the schema call alone would leave
+opens through `sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)`, handing the
+resulting connection to `sqlite_utils.Database`. The URI is built with `as_uri()` rather
+than by interpolating the path: a filename containing `?`, `#` or `%` is URI syntax, and a
+`?` in particular truncates the path and drops `mode=ro`, handing back a writable
+connection to a different file. Confirmed with a database named `lib?x.db`, where the
+interpolated form accepted `CREATE TABLE`. Skipping the schema call alone would leave
 correctness resting on our own branching; the read-only connection makes SQLite enforce it.
 Verified against the real library: reads work through `sqlite_utils` on such a connection
 (`select count(*) from books` → 74), while `UPDATE books ...` and `PRAGMA user_version = 99`
@@ -56,6 +60,14 @@ spec say writes are refused by the engine rather than by convention.
 updated is answerable from the existing rows, which needs only read access, so the reported
 counts match what a real run would do. Extraction still happens — it is a read — so failure
 counts stay accurate rather than being guessed.
+
+Two database states have no `books.path` to read, and both must skip the lookup rather than
+query a column that is not there: one recorded below `SCHEMA_VERSION` with a `books` table,
+which a real open rebuilds from scratch, and a pre-path `books` table with no `path` column.
+In both, the real run ends up inserting every readable file, so classifying them all as
+would-be inserts is exactly what keeps the dry run's counts equal to the real run's — which
+a test asserts directly by comparing `plan_index` against `scan_and_index` on such a
+database.
 
 ## Risks / Trade-offs
 

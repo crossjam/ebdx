@@ -1,7 +1,7 @@
 ## 1. Read-only store access
 
 - [x] 1.1 Add a `read_only` parameter to `get_database` in `src/ebdx/db.py` that opens via
-      `sqlite3.connect(f"file:{path}?mode=ro", uri=True)` and hands the connection to
+      `sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)` and hands it to
       `sqlite_utils.Database`, skipping `_ensure_schema` entirely; verify a read-only open
       of an intact database returns the same `search_books` results as an ordinary open.
 - [x] 1.2 Add `tests/test_db.py` coverage that a read-only open of a database whose
