@@ -415,7 +415,11 @@ def test_dry_run_changes_nothing_for_read_only_commands(runner, tmp_path, comman
     dry = runner.invoke(cli, ["--dry-run", *command])
 
     assert dry.exit_code == plain.exit_code == 0
+    # Byte-identical, label included: a command that cannot change state has no
+    # report that could be mistaken for a completed run, and staying identical
+    # keeps it usable in a pipeline.
     assert dry.output == plain.output
+    assert "DRY RUN" not in dry.output
 
 
 def test_dry_run_output_survives_quiet(runner, tmp_path, make_epub):

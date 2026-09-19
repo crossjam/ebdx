@@ -40,9 +40,11 @@ found them. A dry run SHALL exit 0 when nothing went wrong.
 
 ### Requirement: A dry run reports what it would have done
 
-Under the dry-run option, a command SHALL report the state changes it would have made
-rather than silently doing nothing, and SHALL mark its output as a dry run so the report
-cannot be mistaken for a completed run.
+Under the dry-run option, a command that would otherwise change state SHALL report the
+changes it would have made rather than silently doing nothing, and SHALL mark its output as
+a dry run so the report cannot be mistaken for a completed run. A command that cannot
+change state has no such report to be mistaken, and SHALL NOT be labelled — its output
+stays byte-identical so it remains usable in a pipeline.
 
 #### Scenario: Each file is classified
 
@@ -65,8 +67,15 @@ cannot be mistaken for a completed run.
 
 #### Scenario: Output is labelled
 
-- **WHEN** any command is run with the dry-run option
+- **WHEN** a command that would otherwise create or modify the data directory, the database
+  file, or its contents is run with the dry-run option
 - **THEN** the output identifies the run as a dry run
+
+#### Scenario: Commands with nothing to suppress are not labelled
+
+- **WHEN** a command that cannot change state is run with the dry-run option
+- **THEN** no dry-run label is added and its output is byte-identical to the same command
+  run without the option
 
 ### Requirement: The dry-run option is given before the command
 
