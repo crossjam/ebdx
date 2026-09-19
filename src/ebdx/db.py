@@ -299,6 +299,16 @@ def _missing_schema_columns(db: "Database") -> dict[str, list[str]]:
     return missing
 
 
+def would_discard_existing_rows(db: "Database") -> bool:
+    """Whether a real open rebuilds the schema from scratch, dropping every row.
+
+    A search run against such a database reads rows that a real search would
+    never see, so its results would be stale rather than merely early.
+    """
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    return version < SCHEMA_VERSION and "books" in db.table_names()
+
+
 def would_repair_search_index(db: "Database") -> bool:
     """Whether a real open would rebuild the full-text index.
 

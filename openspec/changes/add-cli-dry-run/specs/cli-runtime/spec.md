@@ -74,6 +74,12 @@ require reproducing the whole of the schema-setup and write paths and would drif
 them. Such a database SHALL instead be reported as unusable, naming what is wrong and
 directing the user to rebuild it, and the command SHALL exit non-zero.
 
+Recognition SHALL be structural — the tables, their columns, and the indexes and triggers
+that are expected to exist. It SHALL NOT extend to the definitions of those objects, since
+comparing them means comparing stored SQL text against the text this build happens to emit,
+and a database altered to keep an object's name while changing its body is indistinguishable
+from a healthy one by any cheaper means.
+
 #### Scenario: A current library is predicted exactly
 
 - **WHEN** `index` is run with the dry-run option against a database this tool wrote
@@ -84,6 +90,12 @@ directing the user to rebuild it, and the command SHALL exit non-zero.
 - **WHEN** `index` is run with the dry-run option against a database recorded at an
   earlier layout, which a real run rebuilds from scratch
 - **THEN** every readable file is reported as a would-be insert, matching the real run
+
+#### Scenario: A rebuild hides what is stored now
+
+- **WHEN** `search` is run with the dry-run option against a database recorded at an
+  earlier layout, whose stored rows a real run would discard while rebuilding
+- **THEN** no results are shown, and the output says the library must be re-indexed first
 
 #### Scenario: An unrecognised layout is reported, not predicted
 

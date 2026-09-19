@@ -518,3 +518,31 @@ def test_dry_run_schema_reports_pending_work(runner, tmp_path, make_epub):
     assert result.exit_code == 0, result.output
     assert "Would:" in result.output
     assert _fingerprint(db_path) == before
+
+
+def test_dry_run_search_shows_no_stale_results_before_a_rebuild(runner, tmp_path):
+    """A real open discards these rows, so showing them would be showing ghosts."""
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute(
+        "CREATE TABLE books (id INTEGER PRIMARY KEY, path TEXT NOT NULL, title TEXT NOT NULL, "
+        "author_id INT, series TEXT, series_index REAL, publisher TEXT, published TEXT, "
+        "isbn TEXT, language TEXT, tags TEXT)"
+    )
+    conn.execute("INSERT INTO authors (id, name) VALUES (1, 'Old Author')")
+    conn.execute("INSERT INTO books (path, title, author_id) VALUES ('/x/s.epub', 'Stale', 1)")
+    conn.execute("CREATE VIRTUAL TABLE books_fts USING fts5(title, author, series, tags)")
+    conn.execute("INSERT INTO books_fts (rowid, title, author) VALUES (1, 'Stale', 'Old Author')")
+    conn.execute("PRAGMA user_version = 0")
+    conn.commit()
+    conn.close()
+
+    dry = runner.invoke(cli, ["--dry-run", "search", "Stale", "--database", str(db_path)])
+    real = runner.invoke(cli, ["search", "Stale", "--database", str(db_path)])
+
+    assert dry.exit_code == 0, dry.output
+    assert "Stale" not in dry.output.replace("--dry-run", "")
+    assert "re-indexed" in dry.output
+    # The real run rebuilds and finds nothing, which is what the dry run promised.
+    assert "No results found" in real.output

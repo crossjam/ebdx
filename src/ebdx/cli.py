@@ -368,9 +368,17 @@ def search(ctx: click.Context, query: str, database, limit: int):
     db = _open_database(database, read_only=dry_run)
     repairable = False
     if dry_run:
-        from ebdx.db import would_repair_search_index
+        from ebdx.db import would_discard_existing_rows, would_repair_search_index
 
         _report_pending_work(db)
+        if would_discard_existing_rows(db):
+            # Anything stored now is discarded by the rebuild, so showing it
+            # would be showing rows a real search never sees.
+            console.print(
+                "[yellow]No results can be shown: the rebuild discards everything "
+                "stored now, and the library must be re-indexed first.[/yellow]"
+            )
+            return
         repairable = would_repair_search_index(db)
     try:
         results = search_books(db, query, limit=limit)
