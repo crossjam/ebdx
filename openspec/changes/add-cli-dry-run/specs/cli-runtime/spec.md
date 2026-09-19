@@ -104,6 +104,14 @@ from a healthy one by any cheaper means.
 - **THEN** no counts are reported, the output names what is wrong, it directs the user to
   rebuild the database, and the exit status is non-zero
 
+#### Scenario: An unrecognised layout is reported by a reading command too
+
+- **WHEN** `search` is run with the dry-run option against a database whose tables are not
+  the ones this tool writes
+- **THEN** the database is reported as unusable, naming what is wrong and directing the
+  user to rebuild it, and the exit status is non-zero — whatever the query says, and
+  whatever the real command would have failed on first
+
 #### Scenario: Output is labelled
 
 - **WHEN** a command that would otherwise create or modify the data directory, the database

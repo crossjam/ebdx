@@ -663,3 +663,30 @@ def test_dry_run_search_still_works_on_a_newer_layout(runner, tmp_path, make_epu
 
     assert result.exit_code == 0, result.output
     assert "Dune" in result.output
+
+
+def test_dry_run_search_reports_an_unrecognised_layout_that_would_open(runner, tmp_path):
+    """The spec asks for the unusable report whatever the real command fails on first.
+
+    This layout opens cleanly -- only write-time columns are absent -- so a real
+    search reaches the query and reports that instead. Reporting the query here
+    too would mean suppressing the unusable report the spec requires, so the
+    divergence is deliberate.
+    """
+    db_path = tmp_path / "write-only.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute(
+        "CREATE TABLE books (id INTEGER PRIMARY KEY, path TEXT NOT NULL, "
+        "title TEXT NOT NULL, author_id INT, series TEXT, tags TEXT)"
+    )
+    conn.execute("PRAGMA user_version = 1")
+    conn.commit()
+    conn.close()
+
+    result = runner.invoke(cli, ["--dry-run", "search", "Dune", "--database", str(db_path)])
+
+    assert result.exit_code != 0
+    assert "Not a usable ebdx database" in result.output
+    assert "series_index" in result.output  # names what is wrong
+    assert "rebuild" in result.output
