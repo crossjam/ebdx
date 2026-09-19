@@ -623,3 +623,43 @@ def test_dry_run_search_reports_a_bad_file_ahead_of_a_bad_query(runner, tmp_path
         assert result.exit_code != 0
         assert "Cannot open database" in result.output
         assert "Invalid search query" not in result.output
+
+
+def test_dry_run_search_reports_an_unopenable_layout_before_the_query(runner, tmp_path):
+    """A real search fails building the schema before it ever parses the query."""
+    db_path = tmp_path / "damaged.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute(
+        "CREATE TABLE books (id INTEGER PRIMARY KEY, path TEXT NOT NULL, "
+        "title TEXT NOT NULL, author_id INT)"
+    )
+    conn.execute("PRAGMA user_version = 1")
+    conn.commit()
+    conn.close()
+    args = ["search", 'broken"(', "--database", str(db_path)]
+
+    dry = runner.invoke(cli, ["--dry-run", *args])
+    real = runner.invoke(cli, args)
+
+    assert dry.exit_code != 0
+    assert "Not a usable ebdx database" in dry.output
+    assert "Invalid search query" not in dry.output
+    # The real command also fails on the database, not the query.
+    assert real.exit_code != 0
+    assert "Cannot open database" in real.output
+    assert "Invalid search query" not in real.output
+
+
+def test_dry_run_search_still_works_on_a_newer_layout(runner, tmp_path, make_epub):
+    """A newer version is left untouched, so the open succeeds and the search runs."""
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Dune", "author": "FH"}])
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA user_version = 99")
+    conn.commit()
+    conn.close()
+
+    result = runner.invoke(cli, ["--dry-run", "search", "Dune", "--database", str(db_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "Dune" in result.output

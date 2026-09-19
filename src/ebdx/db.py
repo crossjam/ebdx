@@ -310,6 +310,21 @@ def _missing_schema_columns(db: "Database") -> dict[str, list[str]]:
     return missing
 
 
+def would_fail_to_open(db: "Database") -> bool:
+    """Whether a real open would fail on this database.
+
+    Reuses the layout recognition rather than modelling failures: an
+    unrecognised layout at or below the current version is one the open tries
+    to build its schema objects over, and fails. Above the current version the
+    open leaves everything alone and returns early, so even an unrecognised
+    layout opens cleanly there -- it is the writes that suffer.
+    """
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    if version > SCHEMA_VERSION:
+        return False
+    return plan_mode(db).mode == "unusable"
+
+
 def would_discard_existing_rows(db: "Database") -> bool:
     """Whether a real open rebuilds the schema from scratch, dropping every row.
 

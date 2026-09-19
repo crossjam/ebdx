@@ -124,6 +124,15 @@ def _summary_table(title: str, rows: list[tuple[str, str]]):
     return table
 
 
+def _report_unusable(database, reason: str) -> None:
+    """Report a layout this build does not write, and stop."""
+    console.print(f"[red]Not a usable ebdx database:[/red] {reason}")
+    console.print(
+        f"[yellow]Delete {database} and run 'ebdx index <directory>' to rebuild it.[/yellow]"
+    )
+    raise click.Abort()
+
+
 def _abort_invalid_query(error) -> None:
     """Report an unparseable search query and stop."""
     console.print(f"[red]Invalid search query:[/red] {error}")
@@ -170,12 +179,7 @@ def _dry_run_index(root: Path, database, *, using_default: bool) -> None:
             # Not a layout this build writes, so what a real run would do
             # cannot be predicted without reproducing the whole schema-setup
             # and write paths here. Say what is wrong instead of guessing.
-            console.print(f"[red]Not a usable ebdx database:[/red] {predicted.reason}")
-            console.print(
-                f"[yellow]Delete {database} and run 'ebdx index <directory>' "
-                "to rebuild it.[/yellow]"
-            )
-            raise click.Abort()
+            _report_unusable(database, predicted.reason)
         would_do.extend(_inspect(database, describe_pending_schema_work, db))
     else:
         would_do.append(f"create the database file {database}")
@@ -372,7 +376,7 @@ def search(ctx: click.Context, query: str, database, limit: int):
         ebdx search "Dune"
         ebdx search "Asimov" --limit 10
     """
-    from ebdx.db import InvalidQueryError, search_books, validate_query
+    from ebdx.db import InvalidQueryError, plan_mode, search_books, validate_query
 
     if database is None:
         database = get_default_db_path()
@@ -397,6 +401,11 @@ def search(ctx: click.Context, query: str, database, limit: int):
     # open defers that discovery to the first query, so touch the file here to
     # keep the two in the same order.
     _inspect(database, db.table_names)
+    if dry_run:
+        from ebdx.db import would_fail_to_open
+
+        if _inspect(database, would_fail_to_open, db):
+            _report_unusable(database, _inspect(database, plan_mode, db).reason)
 
     # Then the query: one that cannot be parsed is a query error whatever else
     # the database turns out to need, and it must be settled before the
