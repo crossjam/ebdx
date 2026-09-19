@@ -63,19 +63,37 @@ def _validate_fts_query(query: str) -> None:
         probe.close()
 
 
-def get_database(db_path: str | Path) -> "Database":
+def get_database(db_path: str | Path, *, read_only: bool = False) -> "Database":
     """Get a database connection, creating the schema if needed.
 
     Args:
         db_path: Path to the SQLite database file.
+        read_only: When true, open the file through SQLite's ``mode=ro`` URI and
+            skip the schema check entirely. Both halves matter. Skipping
+            :func:`_ensure_schema` is what makes the open non-mutating --
+            it otherwise creates missing tables, stamps ``PRAGMA user_version``,
+            and rebuilds a damaged ``books_fts``. Opening read-only is what makes
+            that guarantee enforceable: SQLite refuses any write, so a write path
+            added later fails loudly instead of quietly mutating a database the
+            caller promised not to touch.
 
     Returns:
         A sqlite_utils.Database instance.
+
+    Raises:
+        sqlite3.OperationalError: if ``read_only`` is set and the file does not
+            exist. A read-only connection cannot create one, so callers that
+            want a friendly "no database yet" message must check for the file
+            before calling.
     """
     import sqlite_utils
 
     db_path = Path(db_path)
-    logger.info(f"Opening database: {db_path}")
+    logger.info(f"Opening database{' read-only' if read_only else ''}: {db_path}")
+
+    if read_only:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        return sqlite_utils.Database(conn)
 
     db = sqlite_utils.Database(str(db_path))
     _ensure_schema(db)
@@ -135,6 +153,29 @@ def _ensure_schema(db: "Database") -> None:
 
     if version < SCHEMA_VERSION:
         db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def describe_pending_schema_work(db: "Database") -> list[str]:
+    """Say what :func:`_ensure_schema` would do to ``db``, without doing it.
+
+    Used by dry runs to report the repairs an ordinary open would have
+    performed silently. Mirrors the branching in :func:`_ensure_schema`, so the
+    two must be changed together.
+    """
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    if version > SCHEMA_VERSION:
+        return [f"leave the schema untouched (on-disk version {version} is newer)"]
+    if version < SCHEMA_VERSION and "books" in db.table_names():
+        return [
+            f"rebuild the schema from scratch (on-disk version {version}, "
+            f"current version {SCHEMA_VERSION}), discarding existing rows"
+        ]
+    if not _fts_index_is_intact(db):
+        return [
+            "rebuild the books_fts search index and refill it from "
+            f"{_stored_book_count(db)} stored book(s)"
+        ]
+    return []
 
 
 def _fts_index_is_intact(db: "Database") -> bool:

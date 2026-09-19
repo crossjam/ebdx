@@ -271,3 +271,168 @@ def test_schema_reports_a_missing_database(runner, tmp_path):
 
     assert result.exit_code == 0, result.output
     assert "No database found" in result.output
+
+
+# --- 5.5 dry run -------------------------------------------------------------
+
+
+def _fingerprint(db_path):
+    """Objects and schema version of a database, read without mutating it."""
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        objects = conn.execute(
+            "SELECT type, name, sql FROM sqlite_master ORDER BY type, name"
+        ).fetchall()
+        return objects, conn.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def _break_fts(db_path, *, replace: bool = False):
+    """Drop the FTS index (and optionally leave a plain table in its place)."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        for trigger in ("books_ai", "books_ad", "books_au"):
+            conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+        conn.execute("DROP TABLE books_fts")
+        if replace:
+            conn.execute("CREATE TABLE books_fts (title TEXT)")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_dry_run_index_creates_nothing_where_nothing_existed(runner, tmp_path, make_epub):
+    make_epub("library/a.epub", title="A", author="AA")
+    data_dir = tmp_path / "xdg"
+    db_path = data_dir / "ebdx.db"
+
+    result = runner.invoke(
+        cli, ["--dry-run", "index", str(tmp_path / "library"), "--database", str(db_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not data_dir.exists()
+    # Nothing was written anywhere beneath tmp_path except the library itself.
+    written = {p.name for p in iter_files(tmp_path)}
+    assert written == {"a.epub"}
+    assert "DRY RUN" in result.output
+    assert "Would create" in result.output
+
+
+def test_dry_run_index_leaves_an_existing_database_untouched(runner, tmp_path, make_epub):
+    db_path = _index_library(
+        runner,
+        tmp_path,
+        make_epub,
+        [{"title": "A", "author": "AA"}, {"title": "B", "author": "BB"}],
+    )
+    make_epub("library/fresh.epub", title="Fresh", author="CC")
+    before = _fingerprint(db_path)
+    before_rows = sqlite3.connect(str(db_path)).execute("SELECT count(*) FROM books").fetchone()[0]
+    before_mtime = db_path.stat().st_mtime_ns
+
+    result = runner.invoke(
+        cli, ["--dry-run", "index", str(tmp_path / "library"), "--database", str(db_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    after_rows = sqlite3.connect(str(db_path)).execute("SELECT count(*) FROM books").fetchone()[0]
+    assert (after_rows, _fingerprint(db_path), db_path.stat().st_mtime_ns) == (
+        before_rows,
+        before,
+        before_mtime,
+    )
+    # Two already indexed, one new -- the counts a real run would report.
+    assert "Would index" in result.output
+    assert "Would update" in result.output
+
+
+def test_dry_run_index_counts_match_a_real_run(runner, tmp_path, make_epub):
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "A", "author": "AA"}])
+    make_epub("library/new.epub", title="New", author="BB")
+
+    dry = runner.invoke(
+        cli, ["--dry-run", "index", str(tmp_path / "library"), "--database", str(db_path)]
+    )
+    real = runner.invoke(cli, ["index", str(tmp_path / "library"), "--database", str(db_path)])
+
+    def counts(output, labels):
+        # Only table rows: "Would index" also appears in the "Would index
+        # EPUBs in: ..." header line above the summary.
+        rows = [line for line in output.splitlines() if line.startswith("│")]
+        return [next(r for r in rows if label in r).split("│")[2].strip() for label in labels]
+
+    assert dry.exit_code == 0 and real.exit_code == 0
+    assert counts(dry.output, ["Total found", "Would index", "Would update"]) == counts(
+        real.output, ["Total found", "Newly indexed", "Updated"]
+    )
+
+
+@pytest.mark.parametrize("replace", [False, True], ids=["dropped", "replaced"])
+@pytest.mark.parametrize("command", [["search", "A"], ["schema"]])
+def test_dry_run_read_commands_repair_nothing(runner, tmp_path, make_epub, command, replace):
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "A", "author": "AA"}])
+    _break_fts(db_path, replace=replace)
+    before = _fingerprint(db_path)
+
+    result = runner.invoke(cli, ["--dry-run", *command, "--database", str(db_path)])
+
+    assert _fingerprint(db_path) == before, f"{command[0]} repaired the index under --dry-run"
+    assert "DRY RUN" in result.output
+
+
+@pytest.mark.parametrize("command", [["search", "A"], ["schema"]])
+def test_dry_run_read_commands_do_not_rebuild_a_legacy_database(runner, tmp_path, command):
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author_id INT)")
+    conn.execute("INSERT INTO books (title, author_id) VALUES ('Stale', 1)")
+    conn.commit()
+    conn.close()
+    before = _fingerprint(db_path)
+    assert before[1] == 0
+
+    runner.invoke(cli, ["--dry-run", *command, "--database", str(db_path)])
+
+    assert _fingerprint(db_path) == before, "a dry run rebuilt a pre-path database"
+
+
+def test_dry_run_search_still_reports_a_missing_database(runner, tmp_path):
+    """The exists() guard must stay ahead of the read-only open."""
+    result = runner.invoke(
+        cli, ["--dry-run", "search", "A", "--database", str(tmp_path / "nope.db")]
+    )
+
+    assert "No database found" in result.output
+    assert "Not a usable ebdx database" not in result.output
+
+
+@pytest.mark.parametrize("command", [["discover"], ["about"], ["version"]])
+def test_dry_run_changes_nothing_for_read_only_commands(runner, tmp_path, command):
+    plain = runner.invoke(cli, command)
+    dry = runner.invoke(cli, ["--dry-run", *command])
+
+    assert dry.exit_code == plain.exit_code == 0
+    assert dry.output == plain.output
+
+
+def test_dry_run_output_survives_quiet(runner, tmp_path, make_epub):
+    make_epub("library/a.epub", title="A", author="AA")
+
+    result = runner.invoke(
+        cli,
+        [
+            "--quiet",
+            "--dry-run",
+            "index",
+            str(tmp_path / "library"),
+            "--database",
+            str(tmp_path / "ebdx.db"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "DRY RUN" in result.output
+    assert "Total found" in result.output

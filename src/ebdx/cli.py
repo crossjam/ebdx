@@ -60,22 +60,90 @@ def _parse_pkg_metadata():
     return summary, repo_url
 
 
-def _open_database(database):
+def _open_database(database, *, read_only: bool = False):
     """Open ``database``, reporting an unusable file instead of raising.
 
     Opening runs the schema check, which is itself SQLite work: a locked
     file, a truncated file, or something that is not a database at all fails
     here rather than at query time. Every command goes through this so none
     of them can print a traceback for a bad database file.
+
+    Under ``read_only`` the schema check is skipped and SQLite refuses writes,
+    which is what a dry run needs. Callers must confirm the file exists first:
+    a read-only connection cannot create one, and the resulting error would be
+    reported here as an unusable database rather than a missing one.
     """
     from ebdx.db import get_database
 
     try:
-        return get_database(str(database))
+        return get_database(str(database), read_only=read_only)
     except sqlite3.DatabaseError as e:
         console.print(f"[red]Cannot open database:[/red] {e}")
         console.print(f"[yellow]Not a usable ebdx database: {database}[/yellow]")
         raise click.Abort() from e
+
+
+def _is_dry_run(ctx: click.Context) -> bool:
+    """Whether this run was started with the group's ``--dry-run`` flag."""
+    return bool((ctx.obj or {}).get("dry_run"))
+
+
+def _dry_run_banner(action: str) -> None:
+    """Announce a dry run so its output cannot be read as a completed one."""
+    console.print(f"[bold yellow]DRY RUN[/bold yellow] — {action}; nothing will be changed")
+
+
+def _summary_table(title: str, rows: list[tuple[str, str]]):
+    """Build the two-column metric/count table the index commands report with."""
+    from rich.table import Table
+
+    table = Table(title=title)
+    table.add_column("Metric", style="cyan")
+    table.add_column("Count", style="magenta", justify="right")
+    for metric, count in rows:
+        table.add_row(metric, count)
+    return table
+
+
+def _dry_run_index(root: Path, database, *, using_default: bool) -> None:
+    """Report what ``index`` would do, touching neither disk nor database."""
+    from ebdx.db import describe_pending_schema_work
+    from ebdx.scanner import plan_index
+
+    _dry_run_banner("planning an index run")
+    console.print(f"[cyan]Would index EPUBs in:[/cyan] {root}")
+    console.print(f"[cyan]Database:[/cyan] {database}")
+
+    would_create = []
+    if using_default and not get_data_dir().exists():
+        would_create.append(f"the data directory {get_data_dir()}")
+
+    db = None
+    if Path(database).exists():
+        db = _open_database(database, read_only=True)
+        would_create.extend(describe_pending_schema_work(db))
+    else:
+        would_create.append(f"the database file {database}")
+        would_create.append("the books, authors, and full-text schema")
+
+    for item in would_create:
+        console.print(f"[yellow]Would create:[/yellow] {item}")
+
+    stats = plan_index(root, db, console)
+
+    console.print()
+    console.print("[yellow]Dry run complete — no changes were made.[/yellow]")
+    console.print(
+        _summary_table(
+            "Indexing Summary (dry run)",
+            [
+                ("Total found", str(stats["total"])),
+                ("Would index", str(stats["indexed"])),
+                ("Would update", str(stats["updated"])),
+                ("Would fail", str(stats["failed"])),
+            ],
+        )
+    )
 
 
 def get_data_dir() -> Path:
@@ -111,12 +179,21 @@ def get_default_db_path() -> Path:
     is_flag=True,
     help="Suppress warnings; show only errors.",
 )
-def cli(verbose: bool, quiet: bool):
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Report what would change without changing it. Give it before the command.",
+)
+@click.pass_context
+def cli(ctx: click.Context, verbose: bool, quiet: bool, dry_run: bool):
     """ebdx - eBook Database tool.
 
     Index and search EPUB metadata from your personal library.
     """
     _configure_logging(verbose=verbose, quiet=quiet)
+    # Carried on ctx.obj rather than a module global so the CliRunner tests
+    # stay order-independent; subcommands read it with @click.pass_context.
+    ctx.ensure_object(dict)["dry_run"] = dry_run
 
 
 @cli.command()
@@ -167,7 +244,8 @@ def discover(paths: tuple[Path, ...]):
     default=None,
     help="Database path (default: XDG data directory)",
 )
-def index(root: Path, database):
+@click.pass_context
+def index(ctx: click.Context, root: Path, database):
     """Index metadata from EPUB files in the specified directory.
 
     Recursively scans ROOT for .epub files, extracts their metadata,
@@ -175,9 +253,19 @@ def index(root: Path, database):
     """
     from ebdx.scanner import scan_and_index
 
-    if database is None:
-        _ensure_data_dir()
+    dry_run = _is_dry_run(ctx)
+
+    using_default = database is None
+    if using_default:
+        # Creating the data directory is itself a change, so a dry run only
+        # computes the path it would have used.
+        if not dry_run:
+            _ensure_data_dir()
         database = get_default_db_path()
+
+    if dry_run:
+        _dry_run_index(root, database, using_default=using_default)
+        return
 
     console.print(f"[cyan]Indexing EPUBs in:[/cyan] {root}")
     console.print(f"[cyan]Database:[/cyan] {database}")
@@ -217,7 +305,8 @@ def index(root: Path, database):
     show_default=True,
     help="Maximum number of results to return",
 )
-def search(query: str, database, limit: int):
+@click.pass_context
+def search(ctx: click.Context, query: str, database, limit: int):
     """Search for indexed eBooks using full-text search.
 
     Searches across title, author, and series fields using SQLite FTS5.
@@ -233,12 +322,20 @@ def search(query: str, database, limit: int):
     if database is None:
         database = get_default_db_path()
 
+    dry_run = _is_dry_run(ctx)
+    if dry_run:
+        _dry_run_banner("searching read-only")
+
+    # This guard must stay ahead of the open: under --dry-run the database is
+    # opened read-only, and a read-only connection to a file that does not
+    # exist raises, which would be reported as an unusable database rather
+    # than a missing one.
     if not Path(database).exists():
         console.print(f"[red]No database found at:[/red] {database}")
         console.print("[yellow]Run 'ebdx index <directory>' to create a database first.[/yellow]")
         raise click.Abort()
 
-    db = _open_database(database)
+    db = _open_database(database, read_only=dry_run)
     try:
         results = search_books(db, query, limit=limit)
     except InvalidQueryError as e:
@@ -291,7 +388,8 @@ def search(query: str, database, limit: int):
     default=None,
     help="Show schema for a specific database file",
 )
-def schema(database):
+@click.pass_context
+def schema(ctx: click.Context, database):
     """Display the database schema.
 
     Shows the tables and indexes in the ebdx SQLite database.
@@ -299,12 +397,17 @@ def schema(database):
     if database is None:
         database = get_default_db_path()
 
+    dry_run = _is_dry_run(ctx)
+    if dry_run:
+        _dry_run_banner("inspecting the schema read-only")
+
+    # Guard before the open, for the same reason as in `search`.
     if not Path(database).exists():
         console.print(f"[red]No database found at:[/red] {database}")
         console.print("[yellow]Run 'ebdx index <directory>' to create a database first.[/yellow]")
         return
 
-    db = _open_database(database)
+    db = _open_database(database, read_only=dry_run)
 
     from rich.table import Table
 

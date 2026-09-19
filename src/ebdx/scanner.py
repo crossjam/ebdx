@@ -88,3 +88,52 @@ def scan_and_index(
             stats["failed"] += 1
 
     return stats
+
+
+def plan_index(
+    root: Path,
+    db: sqlite_utils.Database | None,
+    console: Console | None = None,
+) -> dict:
+    """Report what :func:`scan_and_index` would do, without writing anything.
+
+    Returns the same counts, so a dry run and the real run it predicts are
+    directly comparable. ``db`` is ``None`` when no database exists yet, in
+    which case every readable EPUB is a would-be insert.
+
+    Metadata is still extracted, because extraction is a read and it is the
+    only way to know which files would fail; those counts are therefore
+    accurate rather than guessed.
+    """
+    from ebdx.extractor import extract_metadata
+
+    if console is None:
+        console = Console()
+
+    epub_files = sorted(iter_epub_files(root))
+    console.print(f"[cyan]Found {len(epub_files)} EPUB file(s)[/cyan]")
+
+    stats = {"total": len(epub_files), "indexed": 0, "updated": 0, "failed": 0}
+
+    if not epub_files:
+        return stats
+
+    known_paths: set[str] = set()
+    if db is not None and "books" in db.table_names():
+        known_paths = {row[0] for row in db.execute("SELECT path FROM books")}
+
+    for epub_path in epub_files:
+        try:
+            metadata = extract_metadata(epub_path)
+            if metadata is None:
+                logger.warning(f"No metadata found for {epub_path}")
+                stats["failed"] += 1
+                continue
+            # save_book resolves before keying, so classify against the same form.
+            resolved = str(epub_path.resolve())
+            stats["updated" if resolved in known_paths else "indexed"] += 1
+        except Exception as e:
+            logger.warning(f"Error processing {epub_path}: {e}")
+            stats["failed"] += 1
+
+    return stats

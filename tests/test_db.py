@@ -451,3 +451,95 @@ def test_missing_regular_table_column_is_not_masked_as_a_bad_query(tmp_path):
         search_books(db, "Dune")
     assert not isinstance(excinfo.value, InvalidQueryError)
     assert "series_index" in str(excinfo.value)
+
+
+# --- read-only opens (dry-run support) -------------------------------------
+
+
+def _schema_fingerprint(db_path):
+    """The objects and schema version of a database, read without mutating it.
+
+    Opened read-only on purpose: an ordinary open would run _ensure_schema and
+    change the very thing being measured.
+    """
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        objects = conn.execute(
+            "SELECT type, name, sql FROM sqlite_master ORDER BY type, name"
+        ).fetchall()
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        return objects, version
+    finally:
+        conn.close()
+
+
+def test_read_only_open_returns_the_same_results(tmp_path):
+    db_path = tmp_path / "ebdx.db"
+    db = get_database(str(db_path))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+    db.conn.close()
+
+    ordinary = search_books(get_database(str(db_path)), "Dune")
+    readonly = search_books(get_database(str(db_path), read_only=True), "Dune")
+
+    assert readonly == ordinary
+    assert [hit["title"] for hit in readonly] == ["Dune"]
+
+
+@pytest.mark.parametrize("breakage", ["dropped", "replaced"])
+def test_read_only_open_does_not_repair_the_index(tmp_path, breakage):
+    db_path = tmp_path / "ebdx.db"
+    db = get_database(str(db_path))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+    for trigger in ("books_ai", "books_ad", "books_au"):
+        db.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    db.execute("DROP TABLE books_fts")
+    if breakage == "replaced":
+        db.execute("CREATE TABLE books_fts (title TEXT)")
+    db.conn.close()
+
+    before = _schema_fingerprint(db_path)
+    get_database(str(db_path), read_only=True)
+    after = _schema_fingerprint(db_path)
+
+    assert after == before, "a read-only open rebuilt or repopulated the index"
+
+
+def test_read_only_open_does_not_rebuild_a_legacy_database(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    legacy = sqlite_utils.Database(str(db_path))
+    legacy["authors"].create({"id": int, "name": str}, pk="id")
+    legacy["books"].create({"id": int, "title": str, "author_id": int}, pk="id", not_null=["title"])
+    legacy["books"].insert({"title": "Stale", "author_id": 1})
+    legacy.conn.close()
+
+    before = _schema_fingerprint(db_path)
+    assert before[1] == 0  # user_version never stamped
+    db = get_database(str(db_path), read_only=True)
+    after = _schema_fingerprint(db_path)
+
+    assert after == before, "a read-only open rebuilt a pre-path database"
+    assert "path" not in db["books"].columns_dict  # left in its legacy shape
+    assert db["books"].count == 1  # the stale row survives untouched
+
+
+def test_read_only_open_refuses_writes(tmp_path):
+    db_path = tmp_path / "ebdx.db"
+    db = get_database(str(db_path))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+    db.conn.close()
+
+    ro = get_database(str(db_path), read_only=True)
+
+    with pytest.raises(sqlite3.OperationalError, match="readonly"):
+        ro.execute("UPDATE books SET title = 'Tampered'")
+    with pytest.raises(sqlite3.OperationalError, match="readonly"):
+        ro.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 99}")
+
+    assert get_database(str(db_path), read_only=True)["books"].get(1)["title"] == "Dune"
+
+
+def test_read_only_open_of_a_missing_file_raises(tmp_path):
+    """Documented failure mode: a read-only connection cannot create the file."""
+    with pytest.raises(sqlite3.OperationalError):
+        get_database(str(tmp_path / "nope.db"), read_only=True).table_names()
