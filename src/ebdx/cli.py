@@ -366,17 +366,24 @@ def search(ctx: click.Context, query: str, database, limit: int):
         raise click.Abort()
 
     db = _open_database(database, read_only=dry_run)
-    pending = _report_pending_work(db) if dry_run else []
+    repairable = False
+    if dry_run:
+        from ebdx.db import would_repair_search_index
+
+        _report_pending_work(db)
+        repairable = would_repair_search_index(db)
     try:
         results = search_books(db, query, limit=limit)
     except InvalidQueryError as e:
         console.print(f"[red]Invalid search query:[/red] {e}")
         raise click.Abort() from e
     except sqlite3.DatabaseError as e:
-        if dry_run and pending:
-            # The query needs a schema this dry run is refusing to build. That
+        if dry_run and repairable:
+            # The query needs an index this dry run is refusing to build. That
             # is the reported outcome, not a failure of the dry run: a real
-            # search would have repaired the database and succeeded.
+            # search would have rebuilt the index and succeeded. Anything else
+            # -- a layout left untouched, an unrecognised one -- is a genuine
+            # database error and falls through to the message below.
             console.print(f"[yellow]The search cannot run until that happens:[/yellow] {e}")
             return
         # search_books validates the query first, so reaching here means the

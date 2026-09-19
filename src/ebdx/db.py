@@ -216,32 +216,71 @@ def plan_mode(db: "Database") -> PlanMode:
     guess. Since a damaged library is cheap to rebuild by re-indexing, the
     useful answer is to say so rather than to model the failure.
     """
-    if "books" not in db.table_names() and "authors" not in db.table_names():
-        return PlanMode("insert-all", "the books and authors tables would be created")
-
+    tables = db.table_names()
     version = db.execute("PRAGMA user_version").fetchone()[0]
 
-    if version < SCHEMA_VERSION and "books" in db.table_names():
+    # Checked first: a real open drops and recreates this layout wholesale, so
+    # whatever shape it is in now does not matter.
+    if "books" in tables and version < SCHEMA_VERSION:
         return PlanMode(
             "insert-all",
             f"the schema would be rebuilt from scratch (on-disk version {version})",
         )
 
     missing = _missing_schema_columns(db)
-    if not missing:
-        if version > SCHEMA_VERSION:
-            return PlanMode(
-                "unusable",
-                f"the on-disk schema version {version} is newer than this build "
-                f"expects ({SCHEMA_VERSION})",
-            )
-        return PlanMode("compare", "")
+    if missing:
+        described = " and ".join(
+            f"the {table} table is missing {', '.join(repr(c) for c in columns)}"
+            for table, columns in missing.items()
+        )
+        return PlanMode("unusable", f"{described} at schema version {version}")
 
-    described = " and ".join(
-        f"the {table} table is missing {', '.join(repr(c) for c in columns)}"
-        for table, columns in missing.items()
-    )
-    return PlanMode("unusable", f"{described} at schema version {version}")
+    if not _path_index_usable(db):
+        return PlanMode(
+            "unusable",
+            "books.path holds duplicates, so the unique index on it cannot be created",
+        )
+
+    if "books" not in tables:
+        # Created whole by a real open, so every readable file is an insert.
+        return PlanMode("insert-all", "the books table would be created")
+
+    if version > SCHEMA_VERSION:
+        return PlanMode(
+            "unusable",
+            f"the on-disk schema version {version} is newer than this build "
+            f"expects ({SCHEMA_VERSION})",
+        )
+
+    return PlanMode("compare", "")
+
+
+def _path_index_usable(db: "Database") -> bool:
+    """False only when the unique index on ``books.path`` could not be created.
+
+    A missing index is ordinarily recreated on open and is reported as pending
+    work. It cannot be recreated if the rows already hold duplicate paths, and
+    a real open fails there.
+    """
+    if "books" not in db.table_names() or "path" not in db["books"].columns_dict:
+        return True  # nothing to index yet, or already rejected as unusable
+    if _has_path_index(db):
+        return True
+    row = db.execute("SELECT 1 FROM books GROUP BY path HAVING count(*) > 1 LIMIT 1").fetchone()
+    return row is None
+
+
+def _has_path_index(db: "Database") -> bool:
+    """Whether the unique index on ``books.path`` exists."""
+    return any(ix.unique and ix.columns == ["path"] for ix in db["books"].indexes)
+
+
+def _missing_triggers(db: "Database") -> list[str]:
+    """FTS triggers a real open would recreate."""
+    existing = {
+        row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+    }
+    return [name for name in _FTS_TRIGGERS if name not in existing]
 
 
 def _missing_schema_columns(db: "Database") -> dict[str, list[str]]:
@@ -258,6 +297,23 @@ def _missing_schema_columns(db: "Database") -> dict[str, list[str]]:
         if absent:
             missing[table] = absent
     return missing
+
+
+def would_repair_search_index(db: "Database") -> bool:
+    """Whether a real open would rebuild the full-text index.
+
+    This is the only pending work that turns a failing search into a
+    succeeding one, so it -- not merely "something is pending" -- is what makes
+    a dry run's failed query an expected report rather than an error.
+    """
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    if version > SCHEMA_VERSION:
+        return False  # the layout is left untouched, so nothing is repaired
+    if "books" not in db.table_names():
+        return True  # the whole schema, index included, is created
+    if version < SCHEMA_VERSION:
+        return True  # rebuilt from scratch
+    return not _fts_index_is_intact(db)
 
 
 def describe_pending_schema_work(db: "Database") -> list[str]:
@@ -277,12 +333,24 @@ def describe_pending_schema_work(db: "Database") -> list[str]:
         ]
     if "books" not in db.table_names():
         return ["create the books, authors, and full-text schema"]
+
+    work = []
     if not _fts_index_is_intact(db):
-        return [
+        # Rebuilding the index drops and recreates its triggers too, so they
+        # are not listed separately here.
+        work.append(
             "rebuild the books_fts search index and refill it from "
             f"{_stored_book_count(db)} stored book(s)"
-        ]
-    return []
+        )
+    else:
+        absent = _missing_triggers(db)
+        if absent:
+            work.append(f"recreate the search index triggers {', '.join(absent)}")
+
+    if not _has_path_index(db):
+        work.append("create the unique index on books.path")
+
+    return work
 
 
 def _fts_index_is_intact(db: "Database") -> bool:

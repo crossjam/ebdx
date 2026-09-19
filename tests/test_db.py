@@ -25,6 +25,7 @@ from ebdx.db import (
     plan_mode,
     save_book,
     search_books,
+    would_repair_search_index,
 )
 
 
@@ -630,3 +631,65 @@ def test_pending_schema_work_reports_creation_for_an_empty_file(tmp_path):
     work = describe_pending_schema_work(get_database(str(db_path), read_only=True))
 
     assert work == ["create the books, authors, and full-text schema"]
+
+
+def test_plan_mode_never_compares_without_a_books_table(tmp_path):
+    """authors alone must not read as the current layout: plan_index would crash."""
+    db_path = tmp_path / "authors-only.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    conn.commit()
+    conn.close()
+
+    assert plan_mode(get_database(str(db_path), read_only=True)).mode == "insert-all"
+
+
+def test_pending_work_reports_a_missing_trigger(tmp_path):
+    db_path = tmp_path / "ebdx.db"
+    db = get_database(str(db_path))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+    db.execute("DROP TRIGGER books_ai")
+    db.conn.close()
+
+    work = describe_pending_schema_work(get_database(str(db_path), read_only=True))
+
+    assert any("books_ai" in item for item in work)
+
+
+def test_pending_work_reports_a_missing_path_index(tmp_path):
+    db_path = tmp_path / "ebdx.db"
+    db = get_database(str(db_path))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+    db.execute("DROP INDEX idx_books_path")
+    db.conn.close()
+
+    work = describe_pending_schema_work(get_database(str(db_path), read_only=True))
+
+    assert any("books.path" in item for item in work)
+
+
+def test_duplicate_paths_make_the_layout_unusable(tmp_path):
+    """A real open cannot recreate the unique index over duplicate paths."""
+    db_path = tmp_path / "ebdx.db"
+    db = get_database(str(db_path))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+    db.execute("DROP INDEX idx_books_path")
+    db.execute("INSERT INTO books (path, title, author_id) VALUES ('/library/dune.epub', 'Dup', 1)")
+    db.conn.close()
+
+    assert plan_mode(get_database(str(db_path), read_only=True)).mode == "unusable"
+
+
+def test_would_repair_search_index_is_false_for_a_newer_layout(tmp_path):
+    """A newer layout is left untouched, so nothing repairs a broken index."""
+    db_path = tmp_path / "ebdx.db"
+    db = get_database(str(db_path))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+    for trigger in ("books_ai", "books_ad", "books_au"):
+        db.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    db.execute("DROP TABLE books_fts")
+    db.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+    db.conn.close()
+
+    assert not would_repair_search_index(get_database(str(db_path), read_only=True))
