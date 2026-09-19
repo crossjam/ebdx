@@ -546,3 +546,28 @@ def test_dry_run_search_shows_no_stale_results_before_a_rebuild(runner, tmp_path
     assert "re-indexed" in dry.output
     # The real run rebuilds and finds nothing, which is what the dry run promised.
     assert "No results found" in real.output
+
+
+def test_dry_run_search_reports_a_bad_query_before_anything_else(runner, tmp_path):
+    """A query that cannot be parsed is a query error whatever the database is doing."""
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute(
+        "CREATE TABLE books (id INTEGER PRIMARY KEY, path TEXT NOT NULL, title TEXT NOT NULL, "
+        "author_id INT, series TEXT, series_index REAL, publisher TEXT, published TEXT, "
+        "isbn TEXT, language TEXT, tags TEXT)"
+    )
+    conn.execute("PRAGMA user_version = 0")
+    conn.commit()
+    conn.close()
+
+    dry = runner.invoke(cli, ["--dry-run", "search", 'broken"(', "--database", str(db_path)])
+    real = runner.invoke(cli, ["search", 'broken"(', "--database", str(db_path)])
+
+    assert dry.exit_code != 0
+    assert "Invalid search query" in dry.output
+    assert "re-indexed" not in dry.output
+    # Same verdict as the run it predicts.
+    assert real.exit_code != 0
+    assert "Invalid search query" in real.output

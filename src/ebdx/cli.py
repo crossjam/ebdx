@@ -105,6 +105,12 @@ def _summary_table(title: str, rows: list[tuple[str, str]]):
     return table
 
 
+def _abort_invalid_query(error) -> None:
+    """Report an unparseable search query and stop."""
+    console.print(f"[red]Invalid search query:[/red] {error}")
+    raise click.Abort() from error
+
+
 def _report_pending_work(db) -> list[str]:
     """Print the schema work a real open would have done, and return it."""
     from ebdx.db import describe_pending_schema_work
@@ -347,7 +353,7 @@ def search(ctx: click.Context, query: str, database, limit: int):
         ebdx search "Dune"
         ebdx search "Asimov" --limit 10
     """
-    from ebdx.db import InvalidQueryError, search_books
+    from ebdx.db import InvalidQueryError, search_books, validate_query
 
     if database is None:
         database = get_default_db_path()
@@ -366,6 +372,15 @@ def search(ctx: click.Context, query: str, database, limit: int):
         raise click.Abort()
 
     db = _open_database(database, read_only=dry_run)
+
+    # Settled before anything the dry run might report: a query that cannot be
+    # parsed is a query error whatever state the database is in, and a real
+    # search would say so too.
+    try:
+        validate_query(query)
+    except InvalidQueryError as e:
+        _abort_invalid_query(e)
+
     repairable = False
     if dry_run:
         from ebdx.db import would_discard_existing_rows, would_repair_search_index
@@ -382,9 +397,8 @@ def search(ctx: click.Context, query: str, database, limit: int):
         repairable = would_repair_search_index(db)
     try:
         results = search_books(db, query, limit=limit)
-    except InvalidQueryError as e:
-        console.print(f"[red]Invalid search query:[/red] {e}")
-        raise click.Abort() from e
+    except InvalidQueryError as e:  # pragma: no cover - settled above
+        _abort_invalid_query(e)
     except sqlite3.DatabaseError as e:
         if dry_run and repairable:
             # The query needs an index this dry run is refusing to build. That

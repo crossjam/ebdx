@@ -84,6 +84,17 @@ def _validate_fts_query(query: str) -> None:
         probe.close()
 
 
+def validate_query(query: str) -> None:
+    """Raise :class:`InvalidQueryError` if FTS5 cannot parse ``query``.
+
+    Public entry point for callers that must settle whether a query is well
+    formed before deciding what else to do -- a dry run has to report a bad
+    query as a bad query, whatever it would otherwise have said about the
+    database.
+    """
+    _validate_fts_query(query)
+
+
 def get_database(db_path: str | Path, *, read_only: bool = False) -> "Database":
     """Get a database connection, creating the schema if needed.
 
