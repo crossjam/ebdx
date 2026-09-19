@@ -203,7 +203,7 @@ class UnindexableDatabaseError(RuntimeError):
 class PlanMode(NamedTuple):
     """How an index run would treat a database, and why."""
 
-    mode: str  # "compare" | "insert-all" | "fail-all" | "abort"
+    mode: str  # "compare" | "insert-all" | "unusable"
     reason: str
 
 
