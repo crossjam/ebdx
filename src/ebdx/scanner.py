@@ -68,24 +68,35 @@ def scan_and_index(
         return stats
 
     for epub_path in epub_files:
+        # Reading a file and storing it fail for different reasons and deserve
+        # different levels, so they are caught separately. A file this run
+        # could not read is a warning -- expected in a messy library, and
+        # --quiet is meant to hide it. A write that fails is an error: the
+        # database or the disk is the problem, not the book, and --quiet
+        # promises to show errors.
         try:
             metadata = extract_metadata(epub_path)
-            if metadata is None:
-                # A file this run could not read is a warning, not a result:
-                # it goes through the logger so --quiet suppresses it while
-                # the failure still shows up in the returned counts.
-                logger.warning(f"No metadata found for {epub_path}")
-                stats["failed"] += 1
-                continue
+        except Exception as e:
+            logger.warning(f"Error reading {epub_path}: {e}")
+            stats["failed"] += 1
+            continue
 
+        if metadata is None:
+            logger.warning(f"No metadata found for {epub_path}")
+            stats["failed"] += 1
+            continue
+
+        try:
             # save_book keys a book by its absolute path; the resolved path
             # is also what search results report.
             metadata["path"] = str(epub_path.resolve())
             saved = save_book(db, metadata)
-            stats["indexed" if saved.created else "updated"] += 1
         except Exception as e:
-            logger.warning(f"Error processing {epub_path}: {e}")
+            logger.error(f"Failed to store {epub_path}: {e}")
             stats["failed"] += 1
+            continue
+
+        stats["indexed" if saved.created else "updated"] += 1
 
     return stats
 
@@ -118,9 +129,19 @@ def plan_index(
     if not epub_files:
         return stats
 
-    from ebdx.db import plan_mode
+    from ebdx.db import UnindexableDatabaseError, plan_mode
 
-    mode = "insert-all" if db is None else plan_mode(db).mode
+    if db is None:
+        mode = "insert-all"
+    else:
+        predicted = plan_mode(db)
+        if predicted.mode == "abort":
+            # scan_and_index cannot begin against this database, so there are
+            # no counts to report -- returning any would describe a run that
+            # cannot happen. The CLI checks the mode first so it can render
+            # this nicely; the raise is what protects every other caller.
+            raise UnindexableDatabaseError(predicted.reason)
+        mode = predicted.mode
 
     known_paths: set[str] = set()
     if mode == "compare":

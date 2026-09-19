@@ -159,6 +159,15 @@ def _ensure_schema(db: "Database") -> None:
         db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
+class UnindexableDatabaseError(RuntimeError):
+    """Raised when a database cannot be indexed as it stands.
+
+    Carries the reason so a caller can report it. Planning raises this rather
+    than returning counts, because any count would describe a run that cannot
+    start.
+    """
+
+
 class PlanMode(NamedTuple):
     """How an index run would treat a database, and why."""
 

@@ -6,7 +6,15 @@ database layer, covering the path the ``ebdx index`` command takes.
 
 import sqlite3
 
-from ebdx.db import SCHEMA_VERSION, get_database, search_books
+import pytest
+from loguru import logger
+
+from ebdx.db import (
+    SCHEMA_VERSION,
+    UnindexableDatabaseError,
+    get_database,
+    search_books,
+)
 from ebdx.scanner import iter_epub_files, iter_files, plan_index, scan_and_index
 
 
@@ -218,3 +226,61 @@ def test_plan_index_predicts_total_failure_on_a_newer_schema(tmp_path, make_epub
 
     assert planned == {"total": 2, "indexed": 0, "updated": 0, "failed": 2}
     assert planned == actual, "the dry run promised a different outcome than the real run"
+
+
+def test_plan_index_refuses_a_database_that_cannot_be_indexed(tmp_path, make_epub):
+    """Abort mode has no counts to report: scan_and_index cannot even begin."""
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+    db_path = tmp_path / "unusable.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author_id INT)")
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(UnindexableDatabaseError):
+        plan_index(library, get_database(str(db_path), read_only=True))
+
+
+def test_store_failures_are_errors_not_warnings(tmp_path, make_epub, caplog):
+    """--quiet promises to show errors, so a failed write must not be a warning."""
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+    db_path = tmp_path / "newer.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author_id INT)")
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+    conn.commit()
+    conn.close()
+
+    records = []
+    handler_id = logger.add(lambda m: records.append(m.record), level="DEBUG")
+    try:
+        stats = scan_and_index(library, get_database(str(db_path)))
+    finally:
+        logger.remove(handler_id)
+
+    assert stats["failed"] == 1
+    store_failures = [r for r in records if "Failed to store" in r["message"]]
+    assert store_failures, "the write failure was not reported at all"
+    assert all(r["level"].name == "ERROR" for r in store_failures)
+
+
+def test_unreadable_files_stay_warnings(tmp_path, make_epub, make_corrupt_epub):
+    """The counterpart: a bad book is a warning, which --quiet is meant to hide."""
+    library = tmp_path / "library"
+    make_corrupt_epub("library/broken.epub")
+
+    records = []
+    handler_id = logger.add(lambda m: records.append(m.record), level="DEBUG")
+    try:
+        scan_and_index(library, get_database(str(tmp_path / "ebdx.db")))
+    finally:
+        logger.remove(handler_id)
+
+    reported = [r for r in records if "broken.epub" in r["message"]]
+    assert reported
+    assert all(r["level"].name == "WARNING" for r in reported)
