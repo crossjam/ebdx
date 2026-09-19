@@ -44,6 +44,11 @@ _FTS_COLUMNS = ("title", "author", "series", "tags")
 # the schema objects built over it, so the open itself fails. The rest are
 # written only by save_book, so a table missing those opens cleanly and then
 # fails once per file -- a different outcome the plan has to predict.
+# The authors table as this build uses it. `name` is read by the FTS triggers
+# and the refill, and written by save_book's author lookup, so a table without
+# it breaks both the open and the writes.
+_AUTHORS_COLUMNS = {"id": int, "name": str}
+
 _SCHEMA_INIT_COLUMNS = frozenset({"id", "path", "title", "author_id", "series", "tags"})
 
 _BOOKS_COLUMNS = {
@@ -230,27 +235,41 @@ def plan_mode(db: "Database") -> PlanMode:
             f"the schema would be rebuilt from scratch (on-disk version {version})",
         )
 
-    present = set(db["books"].columns_dict)
-    missing = [name for name in _BOOKS_COLUMNS if name not in present]
-    if not missing:
+    books_missing = [n for n in _BOOKS_COLUMNS if n not in set(db["books"].columns_dict)]
+    authors_missing = _missing_authors_columns(db)
+    if not books_missing and not authors_missing:
         return PlanMode("compare", "")
 
-    named = ", ".join(repr(m) for m in missing)
-    unusable = f"the books table is missing {named} at schema version {version}"
+    parts = []
+    if books_missing:
+        parts.append(f"the books table is missing {', '.join(repr(m) for m in books_missing)}")
+    if authors_missing:
+        parts.append(f"the authors table is missing {', '.join(repr(m) for m in authors_missing)}")
+    unusable = f"{' and '.join(parts)} at schema version {version}"
 
     if version > SCHEMA_VERSION:
         # Above the current version the layout is left alone entirely, so the
         # open cannot fail on it; only the writes do.
         return PlanMode("fail-all", f"{unusable}, which is newer than this build expects")
 
-    if "path" in missing:
+    if "path" in books_missing:
         # The unique index on path is built on every open and cannot be.
         return PlanMode("abort", unusable)
-    if not _SCHEMA_INIT_COLUMNS.isdisjoint(missing) and not _fts_index_is_intact(db):
-        # The FTS objects would be rebuilt and refilled, which reads these.
+    touches_open = not _SCHEMA_INIT_COLUMNS.isdisjoint(books_missing) or bool(authors_missing)
+    if touches_open and not _fts_index_is_intact(db):
+        # The FTS objects would be rebuilt and refilled, which reads these
+        # columns -- including authors.name, through the trigger subquery.
         return PlanMode("abort", unusable)
     # Everything the open touches is present; save_book is what fails.
     return PlanMode("fail-all", unusable)
+
+
+def _missing_authors_columns(db: "Database") -> list[str]:
+    """Columns ``authors`` needs but does not have. Empty if it does not exist yet."""
+    if "authors" not in db.table_names():
+        return []  # a real open creates it
+    present = set(db["authors"].columns_dict)
+    return [name for name in _AUTHORS_COLUMNS if name not in present]
 
 
 def describe_pending_schema_work(db: "Database") -> list[str]:

@@ -328,3 +328,24 @@ def test_plan_matches_real_run_when_only_write_columns_are_missing(tmp_path, mak
 
     assert planned == {"total": 2, "indexed": 0, "updated": 0, "failed": 2}
     assert planned == actual, "the plan disagreed with the run it predicted"
+
+
+def test_plan_matches_real_run_when_authors_is_malformed(tmp_path, make_epub):
+    """authors.name is read by the FTS triggers and written by the author lookup."""
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+    books = (
+        "id INTEGER PRIMARY KEY, path TEXT NOT NULL, title TEXT NOT NULL, author_id INT, "
+        "series TEXT, series_index REAL, publisher TEXT, published TEXT, isbn TEXT, "
+        "language TEXT, tags TEXT"
+    )
+    db_path = tmp_path / "authors.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, fullname TEXT)")
+    conn.execute(f"CREATE TABLE books ({books})")
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(UnindexableDatabaseError, match="authors"):
+        plan_index(library, get_database(str(db_path), read_only=True))

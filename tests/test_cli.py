@@ -482,3 +482,38 @@ def test_dry_run_index_refuses_a_database_in_a_missing_directory(runner, tmp_pat
     assert "Cannot index this database" in dry.output
     assert not [line for line in dry.output.splitlines() if line.startswith("│")]
     assert not db_path.parent.exists()
+
+
+def test_dry_run_search_reports_the_repair_instead_of_failing(runner, tmp_path, make_epub):
+    """A real search repairs the index and succeeds, so the dry run must not look broken."""
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Dune", "author": "FH"}])
+    _break_fts(db_path)
+    before = _fingerprint(db_path)
+
+    # The dry run reports the repair and leaves the database alone...
+    dry = runner.invoke(cli, ["--dry-run", "search", "Dune", "--database", str(db_path)])
+
+    assert dry.exit_code == 0, dry.output
+    assert "Would:" in dry.output
+    assert "books_fts" in dry.output
+    assert _fingerprint(db_path) == before
+
+    # ...while the real run performs that repair and succeeds. Checked after
+    # the assertions above, since running it first would repair the database
+    # out from under them.
+    real = runner.invoke(cli, ["search", "Dune", "--database", str(db_path)])
+
+    assert real.exit_code == 0, real.output
+    assert _fingerprint(db_path) != before
+
+
+def test_dry_run_schema_reports_pending_work(runner, tmp_path, make_epub):
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Dune", "author": "FH"}])
+    _break_fts(db_path)
+    before = _fingerprint(db_path)
+
+    result = runner.invoke(cli, ["--dry-run", "schema", "--database", str(db_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "Would:" in result.output
+    assert _fingerprint(db_path) == before

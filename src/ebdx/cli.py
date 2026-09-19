@@ -105,6 +105,16 @@ def _summary_table(title: str, rows: list[tuple[str, str]]):
     return table
 
 
+def _report_pending_work(db) -> list[str]:
+    """Print the schema work a real open would have done, and return it."""
+    from ebdx.db import describe_pending_schema_work
+
+    pending = describe_pending_schema_work(db)
+    for item in pending:
+        console.print(f"[yellow]Would:[/yellow] {item}")
+    return pending
+
+
 def _dry_run_index(root: Path, database, *, using_default: bool) -> None:
     """Report what ``index`` would do, touching neither disk nor database."""
     from ebdx.db import describe_pending_schema_work, plan_mode
@@ -354,12 +364,19 @@ def search(ctx: click.Context, query: str, database, limit: int):
         raise click.Abort()
 
     db = _open_database(database, read_only=dry_run)
+    pending = _report_pending_work(db) if dry_run else []
     try:
         results = search_books(db, query, limit=limit)
     except InvalidQueryError as e:
         console.print(f"[red]Invalid search query:[/red] {e}")
         raise click.Abort() from e
     except sqlite3.DatabaseError as e:
+        if dry_run and pending:
+            # The query needs a schema this dry run is refusing to build. That
+            # is the reported outcome, not a failure of the dry run: a real
+            # search would have repaired the database and succeeded.
+            console.print(f"[yellow]The search cannot run until that happens:[/yellow] {e}")
+            return
         # search_books validates the query first, so reaching here means the
         # database cannot serve the search: a locked file, a corrupt index,
         # schema drift. Reported separately so it is never mistaken for the
@@ -426,6 +443,8 @@ def schema(ctx: click.Context, database):
         return
 
     db = _open_database(database, read_only=dry_run)
+    if dry_run:
+        _report_pending_work(db)
 
     from rich.table import Table
 
