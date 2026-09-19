@@ -47,9 +47,7 @@ def _index_library(runner, tmp_path, make_epub, books):
     for i, spec in enumerate(books):
         make_epub(f"library/book{i}.epub", **spec)
     db_path = tmp_path / "ebdx.db"
-    result = runner.invoke(
-        cli, ["index", str(tmp_path / "library"), "--database", str(db_path)]
-    )
+    result = runner.invoke(cli, ["index", str(tmp_path / "library"), "--database", str(db_path)])
     assert result.exit_code == 0, result.output
     return db_path
 
@@ -61,9 +59,7 @@ def test_no_log_lines_by_default(runner, tmp_path, make_epub):
     db_path = tmp_path / "ebdx.db"
     make_epub("library/a.epub", title="A", author="AA")
 
-    result = runner.invoke(
-        cli, ["index", str(tmp_path / "library"), "--database", str(db_path)]
-    )
+    result = runner.invoke(cli, ["index", str(tmp_path / "library"), "--database", str(db_path)])
 
     assert result.exit_code == 0, result.output
     assert "Opening database" not in result.output
@@ -114,9 +110,7 @@ def test_quiet_suppresses_the_unreadable_file_warning(
 def test_quiet_still_prints_search_results(runner, tmp_path, make_epub):
     db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Dune", "author": "FH"}])
 
-    result = runner.invoke(
-        cli, ["--quiet", "search", "Dune", "--database", str(db_path)]
-    )
+    result = runner.invoke(cli, ["--quiet", "search", "Dune", "--database", str(db_path)])
 
     assert result.exit_code == 0, result.output
     assert "Dune" in result.output
@@ -128,9 +122,7 @@ def test_quiet_still_prints_search_results(runner, tmp_path, make_epub):
 def test_index_summary_reports_updated(runner, tmp_path, make_epub):
     db_path = _index_library(runner, tmp_path, make_epub, [{"title": "A", "author": "AA"}])
 
-    result = runner.invoke(
-        cli, ["index", str(tmp_path / "library"), "--database", str(db_path)]
-    )
+    result = runner.invoke(cli, ["index", str(tmp_path / "library"), "--database", str(db_path)])
 
     assert result.exit_code == 0, result.output
     assert "Updated" in result.output
@@ -152,12 +144,8 @@ def test_search_results_show_a_path_column(runner, tmp_path, make_epub):
     assert "book0.epub" in result.output
 
 
-def test_search_does_not_render_a_missing_series_index_as_none(
-    runner, tmp_path, make_epub
-):
-    db_path = _index_library(
-        runner, tmp_path, make_epub, [{"title": "Solo", "author": "One"}]
-    )
+def test_search_does_not_render_a_missing_series_index_as_none(runner, tmp_path, make_epub):
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Solo", "author": "One"}])
 
     result = runner.invoke(cli, ["search", "Solo", "--database", str(db_path)])
 
@@ -169,9 +157,7 @@ def test_search_does_not_render_a_missing_series_index_as_none(
 
 
 @pytest.mark.parametrize("bad_query", ['"unbalanced', "badcol:Dune"])
-def test_malformed_query_exits_nonzero_without_a_traceback(
-    runner, tmp_path, make_epub, bad_query
-):
+def test_malformed_query_exits_nonzero_without_a_traceback(runner, tmp_path, make_epub, bad_query):
     db_path = _index_library(
         runner, tmp_path, make_epub, [{"title": "Dune", "author": "Frank Herbert"}]
     )
@@ -201,9 +187,7 @@ def test_a_damaged_search_index_is_repaired_on_open(runner, tmp_path, make_epub)
     assert "Dune" in result.output
 
 
-def test_unrepairable_damage_reports_a_database_error_not_a_bad_query(
-    runner, tmp_path, make_epub
-):
+def test_unrepairable_damage_reports_a_database_error_not_a_bad_query(runner, tmp_path, make_epub):
     """Schema drift the opener cannot repair must exit cleanly as a database
     fault, never as a malformed query, and never as a traceback."""
     db_path = _index_library(
@@ -283,9 +267,7 @@ def test_about_runs_without_a_database(runner):
 
 
 def test_schema_reports_a_missing_database(runner, tmp_path):
-    result = runner.invoke(
-        cli, ["schema", "--database", str(tmp_path / "nope.db")]
-    )
+    result = runner.invoke(cli, ["schema", "--database", str(tmp_path / "nope.db")])
 
     assert result.exit_code == 0, result.output
     assert "No database found" in result.output

@@ -55,12 +55,8 @@ def _validate_fts_query(query: str) -> None:
     """
     probe = sqlite3.connect(":memory:")
     try:
-        probe.execute(
-            f"CREATE VIRTUAL TABLE probe USING fts5({', '.join(_FTS_COLUMNS)})"
-        )
-        probe.execute(
-            "SELECT rowid FROM probe WHERE probe MATCH ?", (query,)
-        ).fetchall()
+        probe.execute(f"CREATE VIRTUAL TABLE probe USING fts5({', '.join(_FTS_COLUMNS)})")
+        probe.execute("SELECT rowid FROM probe WHERE probe MATCH ?", (query,)).fetchall()
     except sqlite3.OperationalError as e:
         raise InvalidQueryError(str(e)) from e
     finally:
@@ -151,9 +147,7 @@ def _fts_index_is_intact(db: "Database") -> bool:
     external-content table, and searches would then report no matches for
     books that are still sitting in ``books``.
     """
-    row = db.execute(
-        "SELECT sql FROM sqlite_master WHERE name = 'books_fts'"
-    ).fetchone()
+    row = db.execute("SELECT sql FROM sqlite_master WHERE name = 'books_fts'").fetchone()
     if row is None:
         return False
     return "fts5" in (row[0] or "").lower()
@@ -340,9 +334,7 @@ def save_book(db: "Database", book_data: dict) -> SavedBook:
     }
 
     books = db["books"]
-    existing_id = next(
-        (row["id"] for row in books.rows_where("path = ?", [path])), None
-    )
+    existing_id = next((row["id"] for row in books.rows_where("path = ?", [path])), None)
 
     if existing_id is None:
         books.insert(fields)
@@ -351,10 +343,7 @@ def save_book(db: "Database", book_data: dict) -> SavedBook:
         books.update(existing_id, fields)
         result = SavedBook(id=existing_id, created=False)
 
-    logger.debug(
-        f"{'Inserted' if result.created else 'Updated'} book "
-        f"'{fields['title']}' ({path})"
-    )
+    logger.debug(f"{'Inserted' if result.created else 'Updated'} book '{fields['title']}' ({path})")
     return result
 
 

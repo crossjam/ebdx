@@ -44,9 +44,9 @@ def _book(**overrides):
 
 
 def _match_count(db, term):
-    return db.execute(
-        "SELECT count(*) FROM books_fts WHERE books_fts MATCH ?", [term]
-    ).fetchone()[0]
+    return db.execute("SELECT count(*) FROM books_fts WHERE books_fts MATCH ?", [term]).fetchone()[
+        0
+    ]
 
 
 def test_data_survives_reopen(tmp_path):
@@ -85,9 +85,7 @@ def test_get_database_stamps_schema_version(tmp_path):
 
 def test_books_path_has_unique_index(tmp_path):
     db = get_database(str(tmp_path / "ebdx.db"))
-    assert any(
-        ix.unique and ix.columns == ["path"] for ix in db["books"].indexes
-    )
+    assert any(ix.unique and ix.columns == ["path"] for ix in db["books"].indexes)
 
 
 def test_pre_path_database_is_rebuilt(tmp_path):
@@ -97,9 +95,7 @@ def test_pre_path_database_is_rebuilt(tmp_path):
     # user_version was never stamped (stays 0).
     legacy = sqlite_utils.Database(str(db_path))
     legacy["authors"].create({"id": int, "name": str}, pk="id")
-    legacy["books"].create(
-        {"id": int, "title": str, "author_id": int}, pk="id", not_null=["title"]
-    )
+    legacy["books"].create({"id": int, "title": str, "author_id": int}, pk="id", not_null=["title"])
     legacy["books"].insert({"title": "Stale", "author_id": 1})
     assert "path" not in legacy["books"].columns_dict
     legacy.conn.close()
@@ -129,9 +125,7 @@ def test_newer_schema_version_is_not_downgraded(tmp_path):
 
     reopened = get_database(str(db_path))
     assert reopened["books"].count == 1
-    assert (
-        reopened.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 5
-    )
+    assert reopened.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 5
 
 
 def test_fts_finds_book_after_insert(tmp_path):
@@ -328,9 +322,7 @@ def test_reopen_repairs_a_non_fts_books_fts_and_keeps_the_books(tmp_path):
 
     assert reopened["books"].count == 1  # book data survived the repair
     assert [hit["title"] for hit in search_books(reopened, "Dune")] == ["Dune"]
-    assert [hit["author"] for hit in search_books(reopened, "Herbert")] == [
-        "Frank Herbert"
-    ]
+    assert [hit["author"] for hit in search_books(reopened, "Herbert")] == ["Frank Herbert"]
 
 
 def test_reopen_repairs_a_dropped_books_fts_and_keeps_the_books(tmp_path):
@@ -389,9 +381,7 @@ def test_repaired_index_still_tracks_later_writes(tmp_path):
     reopened = get_database(str(db_path))
     save_book(reopened, _book(path="/library/foundation.epub", title="Foundation"))
 
-    assert [hit["title"] for hit in search_books(reopened, "Foundation")] == [
-        "Foundation"
-    ]
+    assert [hit["title"] for hit in search_books(reopened, "Foundation")] == ["Foundation"]
 
 
 def test_a_healthy_database_is_not_repaired(tmp_path):

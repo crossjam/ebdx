@@ -235,9 +235,7 @@ def search(query: str, database, limit: int):
 
     if not Path(database).exists():
         console.print(f"[red]No database found at:[/red] {database}")
-        console.print(
-            "[yellow]Run 'ebdx index <directory>' to create a database first.[/yellow]"
-        )
+        console.print("[yellow]Run 'ebdx index <directory>' to create a database first.[/yellow]")
         raise click.Abort()
 
     db = _open_database(database)
@@ -303,9 +301,7 @@ def schema(database):
 
     if not Path(database).exists():
         console.print(f"[red]No database found at:[/red] {database}")
-        console.print(
-            "[yellow]Run 'ebdx index <directory>' to create a database first.[/yellow]"
-        )
+        console.print("[yellow]Run 'ebdx index <directory>' to create a database first.[/yellow]")
         return
 
     db = _open_database(database)
