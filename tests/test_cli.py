@@ -665,7 +665,8 @@ def test_dry_run_search_still_works_on_a_newer_layout(runner, tmp_path, make_epu
     assert "Dune" in result.output
 
 
-def test_dry_run_search_reports_an_unrecognised_layout_that_would_open(runner, tmp_path):
+@pytest.mark.parametrize("query", ["Dune", 'broken"('], ids=["valid-query", "invalid-query"])
+def test_dry_run_search_reports_an_unrecognised_layout_that_would_open(runner, tmp_path, query):
     """The spec asks for the unusable report whatever the real command fails on first.
 
     This layout opens cleanly -- only write-time columns are absent -- so a real
@@ -684,9 +685,11 @@ def test_dry_run_search_reports_an_unrecognised_layout_that_would_open(runner, t
     conn.commit()
     conn.close()
 
-    result = runner.invoke(cli, ["--dry-run", "search", "Dune", "--database", str(db_path)])
+    result = runner.invoke(cli, ["--dry-run", "search", query, "--database", str(db_path)])
 
     assert result.exit_code != 0
     assert "Not a usable ebdx database" in result.output
     assert "series_index" in result.output  # names what is wrong
     assert "rebuild" in result.output
+    # "whatever the query says": the unusable report wins over a bad query too.
+    assert "Invalid search query" not in result.output
