@@ -78,9 +78,28 @@ def _open_database(database, *, read_only: bool = False):
     try:
         return get_database(str(database), read_only=read_only)
     except sqlite3.DatabaseError as e:
-        console.print(f"[red]Cannot open database:[/red] {e}")
-        console.print(f"[yellow]Not a usable ebdx database: {database}[/yellow]")
-        raise click.Abort() from e
+        _abort_unusable_database(database, e)
+
+
+def _abort_unusable_database(database, error) -> None:
+    """Report a file SQLite cannot read as an ebdx database, and stop."""
+    console.print(f"[red]Cannot open database:[/red] {error}")
+    console.print(f"[yellow]Not a usable ebdx database: {database}[/yellow]")
+    raise click.Abort() from error
+
+
+def _inspect(database, fn, *args):
+    """Run a read-only schema inspection, reporting a bad file instead of raising.
+
+    A read-only open does no schema work, so a corrupt or locked file is not
+    discovered until the first query -- which for a dry run is one of these
+    inspections. Without this they would escape as a traceback, the very thing
+    _open_database exists to prevent.
+    """
+    try:
+        return fn(*args)
+    except sqlite3.DatabaseError as e:
+        _abort_unusable_database(database, e)
 
 
 def _is_dry_run(ctx: click.Context) -> bool:
@@ -111,11 +130,11 @@ def _abort_invalid_query(error) -> None:
     raise click.Abort() from error
 
 
-def _report_pending_work(db) -> list[str]:
+def _report_pending_work(db, database) -> list[str]:
     """Print the schema work a real open would have done, and return it."""
     from ebdx.db import describe_pending_schema_work
 
-    pending = describe_pending_schema_work(db)
+    pending = _inspect(database, describe_pending_schema_work, db)
     for item in pending:
         console.print(f"[yellow]Would:[/yellow] {item}")
     return pending
@@ -146,7 +165,7 @@ def _dry_run_index(root: Path, database, *, using_default: bool) -> None:
     db = None
     if Path(database).exists():
         db = _open_database(database, read_only=True)
-        predicted = plan_mode(db)
+        predicted = _inspect(database, plan_mode, db)
         if predicted.mode == "unusable":
             # Not a layout this build writes, so what a real run would do
             # cannot be predicted without reproducing the whole schema-setup
@@ -157,7 +176,7 @@ def _dry_run_index(root: Path, database, *, using_default: bool) -> None:
                 "to rebuild it.[/yellow]"
             )
             raise click.Abort()
-        would_do.extend(describe_pending_schema_work(db))
+        would_do.extend(_inspect(database, describe_pending_schema_work, db))
     else:
         would_do.append(f"create the database file {database}")
         would_do.append("create the books, authors, and full-text schema")
@@ -165,7 +184,7 @@ def _dry_run_index(root: Path, database, *, using_default: bool) -> None:
     for item in would_do:
         console.print(f"[yellow]Would:[/yellow] {item}")
 
-    stats = plan_index(root, db, console)
+    stats = _inspect(database, plan_index, root, db, console)
 
     console.print()
     console.print("[yellow]Dry run complete — no changes were made.[/yellow]")
@@ -385,8 +404,8 @@ def search(ctx: click.Context, query: str, database, limit: int):
     if dry_run:
         from ebdx.db import would_discard_existing_rows, would_repair_search
 
-        _report_pending_work(db)
-        if would_discard_existing_rows(db):
+        _report_pending_work(db, database)
+        if _inspect(database, would_discard_existing_rows, db):
             # Anything stored now is discarded by the rebuild, so showing it
             # would be showing rows a real search never sees.
             console.print(
@@ -394,7 +413,7 @@ def search(ctx: click.Context, query: str, database, limit: int):
                 "stored now, and the library must be re-indexed first.[/yellow]"
             )
             return
-        repairable = would_repair_search(db)
+        repairable = _inspect(database, would_repair_search, db)
     try:
         results = search_books(db, query, limit=limit)
     except InvalidQueryError as e:  # pragma: no cover - settled above
@@ -475,7 +494,7 @@ def schema(ctx: click.Context, database):
 
     db = _open_database(database, read_only=dry_run)
     if dry_run:
-        _report_pending_work(db)
+        _report_pending_work(db, database)
 
     from rich.table import Table
 

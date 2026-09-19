@@ -588,3 +588,23 @@ def test_dry_run_search_reports_a_missing_authors_table(runner, tmp_path, make_e
     assert "create the authors table" in dry.output
     assert "damaged" not in dry.output
     assert real.exit_code == 0, real.output
+
+
+@pytest.mark.parametrize(
+    "command",
+    [["index", "LIBRARY"], ["schema"], ["search", "Dune"]],
+    ids=["index", "schema", "search"],
+)
+def test_dry_run_reports_a_corrupt_file_without_a_traceback(runner, tmp_path, make_epub, command):
+    """A read-only open does no schema work, so corruption surfaces at first query."""
+    make_epub("library/a.epub", title="A", author="AA")
+    db_path = tmp_path / "garbage.db"
+    db_path.write_bytes(b"\x00\x01\x02not a database at all" * 64)
+    args = [str(tmp_path / "library") if a == "LIBRARY" else a for a in command]
+
+    result = runner.invoke(cli, ["--dry-run", *args, "--database", str(db_path)])
+
+    assert result.exit_code != 0
+    assert "Cannot open database" in result.output
+    assert "Traceback" not in result.output
+    assert not isinstance(result.exception, sqlite3.DatabaseError)
