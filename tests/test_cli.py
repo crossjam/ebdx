@@ -571,3 +571,20 @@ def test_dry_run_search_reports_a_bad_query_before_anything_else(runner, tmp_pat
     # Same verdict as the run it predicts.
     assert real.exit_code != 0
     assert "Invalid search query" in real.output
+
+
+def test_dry_run_search_reports_a_missing_authors_table(runner, tmp_path, make_epub):
+    """A real search creates the table and succeeds, so this is not a damaged database."""
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Dune", "author": "FH"}])
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("DROP TABLE authors")
+    conn.commit()
+    conn.close()
+
+    dry = runner.invoke(cli, ["--dry-run", "search", "Dune", "--database", str(db_path)])
+    real = runner.invoke(cli, ["search", "Dune", "--database", str(db_path)])
+
+    assert dry.exit_code == 0, dry.output
+    assert "create the authors table" in dry.output
+    assert "damaged" not in dry.output
+    assert real.exit_code == 0, real.output

@@ -320,20 +320,24 @@ def would_discard_existing_rows(db: "Database") -> bool:
     return version < SCHEMA_VERSION and "books" in db.table_names()
 
 
-def would_repair_search_index(db: "Database") -> bool:
-    """Whether a real open would rebuild the full-text index.
+def would_repair_search(db: "Database") -> bool:
+    """Whether a real open would make a currently failing search work.
 
-    This is the only pending work that turns a failing search into a
-    succeeding one, so it -- not merely "something is pending" -- is what makes
-    a dry run's failed query an expected report rather than an error.
+    Not merely "something is pending": a dry run may report work that repairs
+    nothing a query needs. This is the narrower question of whether the open
+    creates or rebuilds one of the objects the search reads, which is what
+    makes a failed query an expected report rather than an error.
     """
     version = db.execute("PRAGMA user_version").fetchone()[0]
     if version > SCHEMA_VERSION:
         return False  # the layout is left untouched, so nothing is repaired
-    if "books" not in db.table_names():
+    tables = db.table_names()
+    if "books" not in tables:
         return True  # the whole schema, index included, is created
     if version < SCHEMA_VERSION:
         return True  # rebuilt from scratch
+    if "authors" not in tables:
+        return True  # created on open; the search joins against it
     return not _fts_index_is_intact(db)
 
 
@@ -352,10 +356,14 @@ def describe_pending_schema_work(db: "Database") -> list[str]:
             f"rebuild the schema from scratch (on-disk version {version}, "
             f"current version {SCHEMA_VERSION}), discarding existing rows"
         ]
-    if "books" not in db.table_names():
+    tables = db.table_names()
+    if "books" not in tables:
         return ["create the books, authors, and full-text schema"]
 
     work = []
+    if "authors" not in tables:
+        # Created on open like any other managed table; the search join needs it.
+        work.append("create the authors table")
     if not _fts_index_is_intact(db):
         # Rebuilding the index drops and recreates its triggers too, so they
         # are not listed separately here.

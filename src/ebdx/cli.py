@@ -383,7 +383,7 @@ def search(ctx: click.Context, query: str, database, limit: int):
 
     repairable = False
     if dry_run:
-        from ebdx.db import would_discard_existing_rows, would_repair_search_index
+        from ebdx.db import would_discard_existing_rows, would_repair_search
 
         _report_pending_work(db)
         if would_discard_existing_rows(db):
@@ -394,7 +394,7 @@ def search(ctx: click.Context, query: str, database, limit: int):
                 "stored now, and the library must be re-indexed first.[/yellow]"
             )
             return
-        repairable = would_repair_search_index(db)
+        repairable = would_repair_search(db)
     try:
         results = search_books(db, query, limit=limit)
     except InvalidQueryError as e:  # pragma: no cover - settled above

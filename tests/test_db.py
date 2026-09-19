@@ -25,7 +25,7 @@ from ebdx.db import (
     plan_mode,
     save_book,
     search_books,
-    would_repair_search_index,
+    would_repair_search,
 )
 
 
@@ -681,7 +681,7 @@ def test_duplicate_paths_make_the_layout_unusable(tmp_path):
     assert plan_mode(get_database(str(db_path), read_only=True)).mode == "unusable"
 
 
-def test_would_repair_search_index_is_false_for_a_newer_layout(tmp_path):
+def test_would_repair_search_is_false_for_a_newer_layout(tmp_path):
     """A newer layout is left untouched, so nothing repairs a broken index."""
     db_path = tmp_path / "ebdx.db"
     db = get_database(str(db_path))
@@ -692,4 +692,18 @@ def test_would_repair_search_index_is_false_for_a_newer_layout(tmp_path):
     db.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
     db.conn.close()
 
-    assert not would_repair_search_index(get_database(str(db_path), read_only=True))
+    assert not would_repair_search(get_database(str(db_path), read_only=True))
+
+
+def test_a_missing_authors_table_is_pending_work_and_repairable(tmp_path):
+    """A real open creates it, so a search that failed on it is not a broken database."""
+    db_path = tmp_path / "ebdx.db"
+    db = get_database(str(db_path))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+    db.execute("DROP TABLE authors")
+    db.conn.close()
+
+    reopened = get_database(str(db_path), read_only=True)
+
+    assert "create the authors table" in describe_pending_schema_work(reopened)
+    assert would_repair_search(reopened)
