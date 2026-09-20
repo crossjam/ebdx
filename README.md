@@ -193,7 +193,7 @@ performing them:
 ```console
 $ ebdx --dry-run schema
 DRY RUN — inspecting the schema read-only; nothing will be changed
-Would: rebuild the books_fts search index and refill it from the stored books
+Would: rebuild the books_fts search index and refill it from 3 stored book(s)
 ```
 
 `discover`, `about`, and `version` cannot change anything, so `--dry-run` leaves them
@@ -219,14 +219,15 @@ any subset of tables, columns, indexes, and triggers can be absent. A copy of th
 drifts from the original, and a missed corner is a dry run promising a run that cannot
 happen. Re-indexing from the EPUBs on disk is cheap, so it says so.
 
-Recognition is structural — which tables, columns, indexes, and triggers exist, not how
-they are defined. A database altered to keep an object's name while changing its body
-still reads as healthy.
+Recognition is structural: which tables and columns exist, that `books_fts` is an FTS5
+table, and that the index over `books.path` exists and is unique. It stops there — stored
+SQL text is never compared against the text this build emits, so a trigger kept under its
+own name with a rewritten body still reads as healthy.
 
 A database recorded at an earlier layout is a different case: a real run rebuilds it from
 scratch, so the dry run reports every readable file as a would-be insert. Because that
-rebuild discards what is stored now, `search --dry-run` shows no results against one and
-says the library must be re-indexed first.
+rebuild discards what is stored now, `ebdx --dry-run search` shows no results against
+one and says the library must be re-indexed first.
 
 ## Where things live
 
