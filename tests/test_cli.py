@@ -14,6 +14,7 @@ import sys
 
 import pytest
 from click.testing import CliRunner
+from conftest import terminal_frames
 from loguru import logger
 
 from ebdx.cli import cli
@@ -940,3 +941,123 @@ def test_dry_run_index_reports_a_blocked_data_directory(runner, tmp_path, make_e
         # Reported, not raised: no OSError escapes to the user.
         assert not isinstance(result.exception, OSError)
     assert blocked.read_text() == "not a directory"
+
+
+# --- 5.6 progress display ----------------------------------------------------
+
+
+def test_no_progress_reaches_a_redirected_run(runner, tmp_path, make_epub):
+    """The CliRunner's streams are not a terminal, which is what a pipe looks like."""
+    make_epub("library/a.epub", title="A", author="AA")
+    db_path = tmp_path / "ebdx.db"
+
+    result = runner.invoke(cli, ["index", str(tmp_path / "library"), "--database", str(db_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "Extracting metadata" not in result.output
+    assert "Scanning" not in result.output
+    # No cursor hiding, no erase-line, nothing else a terminal would swallow.
+    assert "\x1b" not in result.output
+    assert "Indexing Summary" in result.stdout
+
+
+def test_index_shows_progress_on_a_terminal(runner, tmp_path, make_epub, diagnostic_terminal):
+    make_epub("library/a.epub", title="A", author="AA")
+    db_path = tmp_path / "ebdx.db"
+
+    result = runner.invoke(cli, ["index", str(tmp_path / "library"), "--database", str(db_path)])
+
+    shown = diagnostic_terminal.getvalue()
+    assert result.exit_code == 0, result.output
+    assert "Scanning library" in shown
+    assert "Extracting metadata" in shown
+    assert "1/1" in shown
+    # The display stayed on the diagnostic stream; the summary is whole.
+    assert "Extracting metadata" not in result.stdout
+    assert "Indexing Summary" in result.stdout
+    assert "│ Total found   │     1 │" in result.stdout
+
+
+def test_quiet_suppresses_the_progress_display(runner, tmp_path, make_epub, diagnostic_terminal):
+    """Progress is diagnostic, so --quiet silences it -- results still print."""
+    make_epub("library/a.epub", title="A", author="AA")
+    args = ["index", str(tmp_path / "library"), "--database", str(tmp_path / "ebdx.db")]
+
+    loud = runner.invoke(cli, args)
+    assert loud.exit_code == 0, loud.output
+    assert "Extracting metadata" in diagnostic_terminal.getvalue()
+
+    diagnostic_terminal.truncate(0)
+    diagnostic_terminal.seek(0)
+    quiet = runner.invoke(cli, ["--quiet", *args])
+
+    assert quiet.exit_code == 0, quiet.output
+    assert diagnostic_terminal.getvalue() == ""
+    assert "Indexing Summary" in quiet.stdout
+
+
+def test_discover_shows_progress_without_changing_its_listing(
+    runner, tmp_path, make_epub, diagnostic_terminal
+):
+    make_epub("library/a/one.epub", title="One")
+    make_epub("library/b/two.epub", title="Two")
+    args = ["discover", str(tmp_path / "library")]
+
+    shown_run = runner.invoke(cli, args)
+    shown = diagnostic_terminal.getvalue()
+
+    diagnostic_terminal.truncate(0)
+    diagnostic_terminal.seek(0)
+    silent_run = runner.invoke(cli, ["--quiet", *args])
+
+    assert shown_run.exit_code == silent_run.exit_code == 0
+    assert "Scanning library" in shown
+    assert "2 found" in shown
+    assert "Listing files" in shown
+    assert "2/2" in shown
+    assert diagnostic_terminal.getvalue() == ""
+    # The listing is a result: identical whether or not a display was drawn.
+    assert shown_run.stdout == silent_run.stdout
+    assert "one.epub" in shown_run.stdout
+
+
+def test_dry_run_index_shows_the_same_display(runner, tmp_path, make_epub, diagnostic_terminal):
+    """A dry run walks and extracts exactly as a real run does, so it shows the same."""
+    make_epub("library/a.epub", title="A", author="AA")
+
+    result = runner.invoke(
+        cli,
+        ["--dry-run", "index", str(tmp_path / "library"), "--database", str(tmp_path / "ebdx.db")],
+    )
+
+    shown = diagnostic_terminal.getvalue()
+    assert result.exit_code == 0, result.output
+    assert "Scanning library" in shown
+    assert "Extracting metadata" in shown
+    # The label and the summary are untouched by the display.
+    assert "DRY RUN" in result.stdout
+    assert "Dry run complete" in result.stdout
+    assert "│ Would index  │     1 │" in result.stdout
+    assert "\x1b" not in result.stdout
+
+
+def test_a_failure_stays_counted_and_readable_under_the_display(
+    runner, tmp_path, make_epub, make_corrupt_epub, diagnostic_terminal
+):
+    """The CLI's own wiring of sink and display, over a library with a bad book."""
+    make_epub("library/good.epub", title="Good", author="AA")
+    corrupt = make_corrupt_epub("library/broken.epub")
+
+    result = runner.invoke(
+        cli,
+        ["index", str(tmp_path / "library"), "--database", str(tmp_path / "ebdx.db")],
+    )
+
+    shown = diagnostic_terminal.getvalue()
+    assert result.exit_code == 0, result.output
+    records = [frame for frame in terminal_frames(shown) if "WARNING" in frame]
+    assert records, "the warning never reached the terminal"
+    assert all(str(corrupt) in frame for frame in records), records
+    assert not any("━" in frame for frame in records)
+    failed_row = next(line for line in result.stdout.splitlines() if "Failed" in line)
+    assert "1" in failed_row

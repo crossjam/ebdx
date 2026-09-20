@@ -6,7 +6,6 @@ commands for managing an EPUB metadata index.
 """
 
 import sqlite3
-import sys
 from importlib.metadata import metadata as get_metadata
 from importlib.metadata import version as get_version
 from pathlib import Path
@@ -15,6 +14,8 @@ import click
 from loguru import logger
 from platformdirs import user_data_dir
 from rich.console import Console
+
+from ebdx.progress import file_progress, log_sink, short_name, walk_progress
 
 APP_NAME = "ebdx"
 APP_AUTHOR = "crossjam"
@@ -28,12 +29,22 @@ def _configure_logging(*, verbose: bool, quiet: bool) -> None:
     "Opening database" line shows), ``--quiet`` drops it to ERROR. Rich
     ``console.print`` output is unaffected — it carries command results, not
     logs, and stays visible under ``--quiet``.
+
+    Records go through :func:`ebdx.progress.log_sink` rather than straight to
+    ``sys.stderr`` so they share a console with the progress display. Writing
+    to the stream directly would put a record inside a live bar, which would
+    then redraw over it; sharing the console makes Rich lift the record clear
+    of the display and redraw below it.
+
+    ``colorize`` is asked for explicitly because loguru does not colour a
+    function sink on its own: the console it now writes to knows whether it is
+    talking to a terminal, and drops the colour when it is not.
     """
     if verbose and quiet:
         raise click.UsageError("Pass at most one of -v/--verbose and -q/--quiet.")
     level = "INFO" if verbose else "ERROR" if quiet else "WARNING"
     logger.remove()
-    logger.add(sys.stderr, level=level)
+    logger.add(log_sink, level=level, colorize=True)
 
 
 def _get_pkg_version() -> str:
@@ -88,7 +99,7 @@ def _abort_unusable_database(database, error) -> None:
     raise click.Abort() from error
 
 
-def _inspect(database, fn, *args):
+def _inspect(database, fn, *args, **kwargs):
     """Run a read-only schema inspection, reporting a bad file instead of raising.
 
     A read-only open does no schema work, so a corrupt or locked file is not
@@ -97,7 +108,7 @@ def _inspect(database, fn, *args):
     _open_database exists to prevent.
     """
     try:
-        return fn(*args)
+        return fn(*args, **kwargs)
     except sqlite3.DatabaseError as e:
         _abort_unusable_database(database, e)
 
@@ -105,6 +116,17 @@ def _inspect(database, fn, *args):
 def _is_dry_run(ctx: click.Context) -> bool:
     """Whether this run was started with the group's ``--dry-run`` flag."""
     return bool((ctx.obj or {}).get("dry_run"))
+
+
+def _show_progress(ctx: click.Context) -> bool:
+    """Whether this run asked for a progress display.
+
+    ``--quiet`` silences it: the established rule is that quiet hides
+    diagnostics while command results stay visible, and a progress display is
+    diagnostic. Whether one is actually drawn also depends on stderr being a
+    terminal, which :mod:`ebdx.progress` decides in one place for every caller.
+    """
+    return not bool((ctx.obj or {}).get("quiet"))
 
 
 def _dry_run_banner(action: str) -> None:
@@ -163,8 +185,15 @@ def _report_pending_work(db, database) -> list[str]:
     return pending
 
 
-def _dry_run_index(root: Path, database, *, using_default: bool) -> None:
-    """Report what ``index`` would do, touching neither disk nor database."""
+def _dry_run_index(
+    root: Path, database, *, using_default: bool, show_progress: bool = True
+) -> None:
+    """Report what ``index`` would do, touching neither disk nor database.
+
+    A dry run walks the library and extracts from every file exactly as a real
+    run does, so it takes as long and shows the same display; only the label
+    and the summary wording distinguish the two.
+    """
     from ebdx.db import describe_pending_schema_work, plan_mode
     from ebdx.scanner import plan_index
 
@@ -206,7 +235,7 @@ def _dry_run_index(root: Path, database, *, using_default: bool) -> None:
     for item in would_do:
         console.print(f"[yellow]Would:[/yellow] {item}")
 
-    stats = _inspect(database, plan_index, root, db, console)
+    stats = _inspect(database, plan_index, root, db, console, show_progress=show_progress)
 
     console.print()
     console.print("[yellow]Dry run complete — no changes were made.[/yellow]")
@@ -273,14 +302,17 @@ def cli(ctx: click.Context, verbose: bool, quiet: bool, dry_run: bool):
     Index and search EPUB metadata from your personal library.
     """
     _configure_logging(verbose=verbose, quiet=quiet)
-    # Carried on ctx.obj rather than a module global so the CliRunner tests
-    # stay order-independent; subcommands read it with @click.pass_context.
-    ctx.ensure_object(dict)["dry_run"] = dry_run
+    # Carried on ctx.obj rather than module globals so the CliRunner tests stay
+    # order-independent; subcommands read them with @click.pass_context.
+    # ``quiet`` rides along because it decides more than the log level now: it
+    # also suppresses the progress display.
+    ctx.ensure_object(dict).update({"dry_run": dry_run, "quiet": quiet})
 
 
 @cli.command()
 @click.argument("paths", nargs=-1, type=click.Path(exists=True, path_type=Path))
-def discover(paths: tuple[Path, ...]):
+@click.pass_context
+def discover(ctx: click.Context, paths: tuple[Path, ...]):
     """Recursively find and list EPUB files.
 
     Scans the specified PATHS for .epub files and displays them in a table.
@@ -291,12 +323,19 @@ def discover(paths: tuple[Path, ...]):
     if not paths:
         paths = (Path.cwd(),)
 
-    epub_files = []
+    show_progress = _show_progress(ctx)
+
+    epub_files: list[Path] = []
     for path in paths:
         if path.is_file() and path.suffix.lower() == ".epub":
             epub_files.append(path)
         elif path.is_dir():
-            epub_files.extend(iter_epub_files(path))
+            # Each directory is its own walk with its own unknowable total, so
+            # each gets its own pulsing display naming the root it is under.
+            with walk_progress(
+                iter_epub_files(path), f"Scanning {short_name(path)}", enabled=show_progress
+            ) as walked:
+                epub_files.extend(walked)
 
     if not epub_files:
         console.print("[yellow]No EPUB files discovered.[/yellow]")
@@ -308,8 +347,12 @@ def discover(paths: tuple[Path, ...]):
     table.add_column("Filename", style="cyan")
     table.add_column("Path", style="magenta")
 
-    for epub in epub_files:
-        table.add_row(epub.name, str(epub.parent))
+    # Building the table is a row per file, which on a large library is long
+    # enough to be worth reporting -- and by now the total is known, so this
+    # half of the display is a real position rather than a pulse.
+    with file_progress(epub_files, "Listing files", enabled=show_progress) as tracked:
+        for epub in tracked:
+            table.add_row(epub.name, str(epub.parent))
 
     console.print(table)
 
@@ -345,15 +388,17 @@ def index(ctx: click.Context, root: Path, database):
             _ensure_data_dir()
         database = get_default_db_path()
 
+    show_progress = _show_progress(ctx)
+
     if dry_run:
-        _dry_run_index(root, database, using_default=using_default)
+        _dry_run_index(root, database, using_default=using_default, show_progress=show_progress)
         return
 
     console.print(f"[cyan]Indexing EPUBs in:[/cyan] {root}")
     console.print(f"[cyan]Database:[/cyan] {database}")
 
     db = _open_database(database)
-    stats = scan_and_index(root, db, console)
+    stats = scan_and_index(root, db, console, show_progress=show_progress)
 
     console.print()
     console.print("[green]Indexing complete![/green]")
