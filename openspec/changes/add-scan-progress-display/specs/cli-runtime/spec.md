@@ -65,9 +65,9 @@ every case.
 
 #### Scenario: Results are unchanged by the display
 
-- **WHEN** a command that shows a display is run on a terminal and again with its streams
-  redirected
-- **THEN** the result output is the same in both runs
+- **WHEN** a command that shows a display is run with its diagnostic stream on a terminal
+  and again with that stream redirected, its result stream redirected in both runs
+- **THEN** the result output is byte-identical between the two runs
 
 ## MODIFIED Requirements
 

@@ -367,6 +367,18 @@ def test_indexing_shows_both_phases_of_progress(tmp_path, make_epub, diagnostic_
     assert "Found 3 EPUB file(s)" not in shown
 
 
+def test_a_bracketed_filename_is_shown_verbatim(tmp_path, make_epub, diagnostic_terminal):
+    """Rich reads square brackets as markup, so a file called `x[dim]y.epub`
+    would have the bracketed part parsed as a tag and dropped from the display
+    -- the name shown would not be the name on disk."""
+    make_epub("library/x[dim]y.epub", title="Dim", author="A")
+
+    _, console = _result_console()
+    scan_and_index(tmp_path / "library", get_database(str(tmp_path / "ebdx.db")), console)
+
+    assert "x[dim]y.epub" in diagnostic_terminal.getvalue()
+
+
 def test_the_display_names_the_file_in_hand(tmp_path, make_epub, diagnostic_terminal):
     library = tmp_path / "library"
     make_epub("library/dune.epub", title="Dune", author="FH")

@@ -80,6 +80,20 @@ def short_name(path: Path) -> str:
     return path.name or str(path)
 
 
+def _description_column() -> TextColumn:
+    """The fixed part of the line, naming what is being worked through.
+
+    Markup is off and the style is applied as a style: the description carries
+    a directory name, and a directory called ``x[dim]y`` would otherwise have
+    the bracketed part read as a tag and silently dropped from the display.
+    """
+    return TextColumn(
+        "{task.description}",
+        style="progress.description",
+        markup=False,
+    )
+
+
 def _label_column() -> TextColumn:
     """The column naming the item in hand, truncated rather than wrapped.
 
@@ -90,6 +104,7 @@ def _label_column() -> TextColumn:
         "{task.fields[label]}",
         table_column=Column(no_wrap=True, overflow="ellipsis", ratio=1),
         style="dim",
+        markup=False,
     )
 
 
@@ -136,7 +151,7 @@ def walk_progress(
 
     with _display(
         SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
+        _description_column(),
         BarColumn(),
         _label_column(),
         TimeElapsedColumn(),
@@ -169,7 +184,7 @@ def file_progress(
 
     with _display(
         SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
+        _description_column(),
         BarColumn(),
         MofNCompleteColumn(),
         _label_column(),
