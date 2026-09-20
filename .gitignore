@@ -221,8 +221,9 @@ __marimo__/
 .streamlit/secrets.toml
 
 .kata.local.toml
-# roborev snapshots
+# roborev snapshots and local repo config
 /.roborev/
+/.roborev.toml
 
 # Claude Code local-only settings (shared skills/commands under .claude/ are tracked)
 .claude/settings.local.json
