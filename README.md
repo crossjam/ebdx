@@ -86,6 +86,7 @@ Global options, which go before the subcommand:
 
 - `-v`, `--verbose` — show informational logs (database opens, index rebuilds)
 - `-q`, `--quiet` — errors only
+- `--dry-run` — report what would change, and change nothing ([Dry run](#dry-run))
 
 By default only warnings and errors are logged. Command results are printed regardless.
 
@@ -137,6 +138,97 @@ Invalid search query: no such column: badcol
 Aborted!
 ```
 
+### Dry run
+
+`--dry-run` goes before the subcommand, like `-v` and `-q`. It reports what the command
+would do and leaves the data directory, the database file, and its contents and schema
+exactly as it found them.
+
+Against a library that has not been indexed yet, it names everything it would create:
+
+```console
+$ ebdx --dry-run index ~/books
+DRY RUN — planning an index run; nothing will be changed
+Would index EPUBs in: /home/you/books
+Database: /home/you/.local/share/ebdx/ebdx.db
+Would: create the data directory /home/you/.local/share/ebdx
+Would: create the database file /home/you/.local/share/ebdx/ebdx.db
+Would: create the books, authors, and full-text schema
+Found 3 EPUB file(s)
+
+Dry run complete — no changes were made.
+ Indexing Summary (dry
+          run)
+┏━━━━━━━━━━━━━━┳━━━━━━━┓
+┃ Metric       ┃ Count ┃
+┡━━━━━━━━━━━━━━╇━━━━━━━┩
+│ Total found  │     3 │
+│ Would index  │     3 │
+│ Would update │     0 │
+│ Would fail   │     0 │
+└──────────────┴───────┘
+```
+
+The counts are the ones a real run would produce, read from the stored `books.path`, so
+adding one book to an indexed library separates the insert from the updates:
+
+```console
+$ ebdx --dry-run index ~/books
+...
+│ Total found  │     4 │
+│ Would index  │     1 │
+│ Would update │     3 │
+│ Would fail   │     0 │
+```
+
+A file that cannot be read is still counted under `Would fail` — determining that needs
+only a read.
+
+`search` and `schema` look like reads, but a normal open of the database creates missing
+tables, stamps the schema version, and rebuilds a damaged search index. Under `--dry-run`
+they skip that check and connect through SQLite's read-only URI, so the open cannot write
+even by accident. They report the repairs a real open would have performed instead of
+performing them:
+
+```console
+$ ebdx --dry-run schema
+DRY RUN — inspecting the schema read-only; nothing will be changed
+Would: rebuild the books_fts search index and refill it from 3 stored book(s)
+```
+
+`discover`, `about`, and `version` cannot change anything, so `--dry-run` leaves them
+alone — no label is added and their output stays byte-identical, which keeps them usable
+in a pipeline.
+
+#### It declines to guess
+
+For a database layout `ebdx` did not write, a dry run does not predict counts. It names
+what is wrong, tells you to rebuild, and exits non-zero:
+
+```console
+$ ebdx --dry-run search Asimov
+DRY RUN — searching read-only; nothing will be changed
+Not a usable ebdx database: the books table is missing 'title', 'author_id', … and
+the authors table is missing 'name' at schema version 0
+Delete /home/you/.local/share/ebdx/ebdx.db and run 'ebdx index <directory>' to rebuild it.
+Aborted!
+```
+
+Predicting those cases would mean reproducing the whole schema-setup and write path, and
+any subset of tables, columns, indexes, and triggers can be absent. A copy of that logic
+drifts from the original, and a missed corner is a dry run promising a run that cannot
+happen. Re-indexing from the EPUBs on disk is cheap, so it says so.
+
+Recognition is structural: which tables and columns exist, that `books_fts` is an FTS5
+table, and that the index over `books.path` exists and is unique. It stops there — stored
+SQL text is never compared against the text this build emits, so a trigger kept under its
+own name with a rewritten body still reads as healthy.
+
+A database recorded at an earlier layout is a different case: a real run rebuilds it from
+scratch, so the dry run reports every readable file as a would-be insert. Because that
+rebuild discards what is stored now, `ebdx --dry-run search` shows no results against
+one and says the library must be re-indexed first.
+
 ## Where things live
 
 The database defaults to the XDG data directory — on Linux
@@ -149,7 +241,8 @@ location and the old rows remain until the database is rebuilt.
 
 If the search index is ever found damaged — dropped, or replaced by a non-FTS5
 table — it is rebuilt from the stored books the next time the database is opened.
-Your book rows are kept; only the derived index is recomputed.
+Your book rows are kept; only the derived index is recomputed. Run the command under
+`--dry-run` to see that a rebuild is pending without triggering it.
 
 ## Limitations
 

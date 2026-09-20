@@ -4,8 +4,18 @@ These exercise ``scan_and_index`` against generated EPUBs and the real
 database layer, covering the path the ``ebdx index`` command takes.
 """
 
-from ebdx.db import get_database, search_books
-from ebdx.scanner import iter_epub_files, iter_files, scan_and_index
+import sqlite3
+
+import pytest
+from loguru import logger
+
+from ebdx.db import (
+    SCHEMA_VERSION,
+    UnindexableDatabaseError,
+    get_database,
+    search_books,
+)
+from ebdx.scanner import iter_epub_files, iter_files, plan_index, scan_and_index
 
 
 def test_scan_and_index_stores_an_extracted_epub(tmp_path, make_epub):
@@ -154,3 +164,170 @@ def test_iter_files_does_not_follow_directory_symlink_loops(tmp_path):
     names = [p.name for p in iter_files(tmp_path)]
 
     assert names == ["book.epub"]
+
+
+def _legacy_database(db_path):
+    """A pre-path database: `books` exists but has no `path` column, version 0."""
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL, author_id INT)")
+    conn.execute("INSERT INTO books (title, author_id) VALUES ('Stale', 1)")
+    conn.commit()
+    conn.close()
+
+
+def test_plan_index_handles_a_pre_path_database(tmp_path, make_epub):
+    """A real run rebuilds that schema and inserts everything, so the plan says so."""
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+    make_epub("library/b.epub", title="B", author="BB")
+    db_path = tmp_path / "legacy.db"
+    _legacy_database(db_path)
+
+    stats = plan_index(library, get_database(str(db_path), read_only=True))
+
+    assert stats == {"total": 2, "indexed": 2, "updated": 0, "failed": 0}
+
+
+def test_plan_index_matches_a_real_run_on_a_pre_path_database(tmp_path, make_epub):
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+    db_path = tmp_path / "legacy.db"
+    _legacy_database(db_path)
+
+    planned = plan_index(library, get_database(str(db_path), read_only=True))
+    actual = scan_and_index(library, get_database(str(db_path)))
+
+    assert planned == actual
+
+
+def test_plan_index_without_a_database_counts_every_file_as_new(tmp_path, make_epub):
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+
+    assert plan_index(library, None) == {"total": 1, "indexed": 1, "updated": 0, "failed": 0}
+
+
+def _books_table(db_path, columns, version=SCHEMA_VERSION):
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute(f"CREATE TABLE books ({columns})")
+    conn.execute(f"PRAGMA user_version = {version}")
+    conn.commit()
+    conn.close()
+
+
+@pytest.mark.parametrize(
+    ("columns", "version"),
+    [
+        # Opens cleanly but cannot be written: missing only write-only columns.
+        (
+            "id INTEGER PRIMARY KEY, path TEXT NOT NULL, title TEXT NOT NULL, "
+            "author_id INT, series TEXT, tags TEXT",
+            SCHEMA_VERSION,
+        ),
+        # Recorded above what this build understands.
+        (
+            "id INTEGER PRIMARY KEY, path TEXT NOT NULL, title TEXT NOT NULL, author_id INT",
+            SCHEMA_VERSION + 1,
+        ),
+    ],
+    ids=["missing-write-columns", "newer-version"],
+)
+def test_plan_index_declines_to_predict_an_unrecognised_layout(
+    tmp_path, make_epub, columns, version
+):
+    """No counts for a layout this build does not write -- see plan_mode."""
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+    _books_table(tmp_path / "odd.db", columns, version=version)
+
+    with pytest.raises(UnindexableDatabaseError):
+        plan_index(library, get_database(str(tmp_path / "odd.db"), read_only=True))
+
+
+def test_plan_matches_real_run_when_authors_is_malformed(tmp_path, make_epub):
+    """authors.name is read by the FTS triggers and written by the author lookup."""
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+    books = (
+        "id INTEGER PRIMARY KEY, path TEXT NOT NULL, title TEXT NOT NULL, author_id INT, "
+        "series TEXT, series_index REAL, publisher TEXT, published TEXT, isbn TEXT, "
+        "language TEXT, tags TEXT"
+    )
+    db_path = tmp_path / "authors.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, fullname TEXT)")
+    conn.execute(f"CREATE TABLE books ({books})")
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(UnindexableDatabaseError, match="authors"):
+        plan_index(library, get_database(str(db_path), read_only=True))
+
+
+def test_plan_index_declines_an_unrecognised_layout_even_for_an_empty_library(tmp_path):
+    """An empty library must not turn an unpredictable database into a clean zero."""
+    library = tmp_path / "empty"
+    library.mkdir()
+    _books_table(
+        tmp_path / "odd.db",
+        "id INTEGER PRIMARY KEY, title TEXT NOT NULL, author_id INT",
+    )
+
+    with pytest.raises(UnindexableDatabaseError):
+        plan_index(library, get_database(str(tmp_path / "odd.db"), read_only=True))
+
+
+def test_store_failures_are_errors_not_warnings(tmp_path, make_epub):
+    """--quiet promises to show errors, so a failed write must not be a warning."""
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+    _books_table(
+        tmp_path / "newer.db",
+        "id INTEGER PRIMARY KEY, title TEXT NOT NULL, author_id INT",
+        version=SCHEMA_VERSION + 1,
+    )
+
+    records = []
+    handler_id = logger.add(lambda m: records.append(m.record), level="DEBUG")
+    try:
+        stats = scan_and_index(library, get_database(str(tmp_path / "newer.db")))
+    finally:
+        logger.remove(handler_id)
+
+    assert stats["failed"] == 1
+    store_failures = [r for r in records if "Failed to store" in r["message"]]
+    assert store_failures, "the write failure was not reported at all"
+    assert all(r["level"].name == "ERROR" for r in store_failures)
+
+
+def test_unreadable_files_stay_warnings(tmp_path, make_corrupt_epub):
+    """The counterpart: a bad book is a warning, which --quiet is meant to hide."""
+    library = tmp_path / "library"
+    make_corrupt_epub("library/broken.epub")
+
+    records = []
+    handler_id = logger.add(lambda m: records.append(m.record), level="DEBUG")
+    try:
+        scan_and_index(library, get_database(str(tmp_path / "ebdx.db")))
+    finally:
+        logger.remove(handler_id)
+
+    reported = [r for r in records if "broken.epub" in r["message"]]
+    assert reported
+    assert all(r["level"].name == "WARNING" for r in reported)
+
+
+def test_plan_counts_a_symlink_to_an_indexed_file_as_an_update(tmp_path, make_epub):
+    """Both resolve to one path, so a real run inserts once and updates once."""
+    library = tmp_path / "library"
+    make_epub("library/real.epub", title="Real", author="AA")
+    (library / "link.epub").symlink_to(library / "real.epub")
+
+    planned = plan_index(library, None)
+    actual = scan_and_index(library, get_database(str(tmp_path / "ebdx.db")))
+
+    assert planned == {"total": 2, "indexed": 1, "updated": 1, "failed": 0}
+    assert planned == actual
