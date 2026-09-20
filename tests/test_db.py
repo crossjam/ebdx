@@ -346,6 +346,34 @@ def test_punctuation_in_an_ordinary_query_searches_for_those_words(tmp_path, que
     assert [book["title"] for book in results] == [expected_title]
 
 
+@pytest.mark.parametrize(
+    "query",
+    ["Dune OR, Foundation", "Dune AND. Foundation", "Dune NOT/ Foundation", "OR,"],
+)
+def test_an_operator_with_punctuation_attached_is_still_an_operator(tmp_path, query):
+    """Punctuation no longer blocks the rescue on its own, so the keyword check
+    compares each word's alphanumeric core. Otherwise `Dune OR, Foundation`
+    slips past as three literal terms and reports no matches for a query that
+    plainly reached for OR."""
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(title="Dune"))
+    save_book(db, _book(path="/library/foundation.epub", title="Foundation"))
+
+    with pytest.raises(InvalidQueryError):
+        search_books(db, query)
+
+
+def test_a_lowercase_or_in_a_title_is_not_an_operator(tmp_path):
+    """FTS5 operators are uppercase, so the comma-and-`or` of a real title --
+    `Moby-Dick; or, The Whale` -- must still be rescued."""
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(path="/library/moby.epub", title="Moby-Dick; or, The Whale"))
+
+    results = search_books(db, "Moby-Dick; or, The Whale")
+
+    assert [book["title"] for book in results] == ["Moby-Dick; or, The Whale"]
+
+
 def test_a_bare_near_is_an_ordinary_term_not_an_operator(tmp_path):
     """NEAR is a function in FTS5, so a real proximity query carries "(" and is
     excluded as syntax. A bare NEAR is just a word -- `Frank NEAR Herbert`

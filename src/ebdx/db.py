@@ -120,7 +120,20 @@ def _is_plain_text(query: str) -> bool:
         return False
     if not any(character.isalnum() for character in query):
         return False
-    return not (set(query.split()) & _FTS_KEYWORDS)
+    # Compared on each word's alphanumeric core, not the raw word: now that
+    # punctuation no longer blocks the rescue on its own, `Dune OR, Foundation`
+    # would otherwise slip past as three literal terms and report no matches
+    # for a query that plainly reached for OR.
+    return not ({_word_core(word) for word in query.split()} & _FTS_KEYWORDS)
+
+
+def _word_core(word: str) -> str:
+    """``word`` stripped of leading and trailing non-alphanumeric characters.
+
+    So ``OR,`` and ``AND.`` are recognised as the operators they were reaching
+    for, while ``Dune,`` and ``Mr.`` keep cores that are nothing of the kind.
+    """
+    return word.strip("".join(c for c in word if not c.isalnum()))
 
 
 def _as_term_query(query: str) -> str:
