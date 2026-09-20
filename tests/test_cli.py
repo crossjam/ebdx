@@ -144,6 +144,52 @@ def test_search_results_show_a_path_column(runner, tmp_path, make_epub):
     assert "book0.epub" in result.output
 
 
+@pytest.mark.parametrize("query", ["Ender's", "Well-Tempered"])
+def test_search_accepts_a_title_with_punctuation(runner, tmp_path, make_epub, query):
+    """The reported bug, from the user's side: an ordinary title with an
+    apostrophe or a hyphen is searched for, not rejected as a bad query."""
+    db_path = _index_library(
+        runner,
+        tmp_path,
+        make_epub,
+        [
+            {"title": "Ender's Game", "author": "Orson Scott Card"},
+            {"title": "Well-Tempered Clavier", "author": "Bach"},
+        ],
+    )
+
+    result = runner.invoke(cli, ["search", query, "--database", str(db_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "Invalid search query" not in result.output
+    assert "1 found" in result.output
+
+
+def test_dry_run_search_accepts_a_title_with_punctuation(runner, tmp_path, make_epub):
+    """The dry-run preflight validates the query separately, so it has to agree
+    with the real search about which queries are searchable."""
+    db_path = _index_library(
+        runner, tmp_path, make_epub, [{"title": "Ender's Game", "author": "Orson Scott Card"}]
+    )
+
+    result = runner.invoke(cli, ["--dry-run", "search", "Ender's", "--database", str(db_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "Invalid search query" not in result.output
+    assert "1 found" in result.output
+
+
+def test_search_still_reports_a_mistyped_column_filter(runner, tmp_path, make_epub):
+    """Requoting must not turn a wrong filter into a silent empty result."""
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Dune", "author": "Herbert"}])
+
+    result = runner.invoke(cli, ["search", "badcol:Dune", "--database", str(db_path)])
+
+    assert result.exit_code != 0
+    assert "Invalid search query" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_search_does_not_render_a_missing_series_index_as_none(runner, tmp_path, make_epub):
     db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Solo", "author": "One"}])
 

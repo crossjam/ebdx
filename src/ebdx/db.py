@@ -5,6 +5,7 @@ Provides database connection management and query functions
 for indexing and searching EPUB metadata using sqlite_utils.
 """
 
+import re
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -84,15 +85,83 @@ def _validate_fts_query(query: str) -> None:
         probe.close()
 
 
-def validate_query(query: str) -> None:
-    """Raise :class:`InvalidQueryError` if FTS5 cannot parse ``query``.
+# A query using no FTS5 syntax at all: word characters, whitespace, and the
+# punctuation that occurs *inside* ordinary words. Every FTS5 metacharacter is
+# excluded, so a query matching this cannot have been an attempt at syntax --
+# it is a title someone typed.
+_PLAIN_TEXT_QUERY = re.compile(r"^[\w\s'\u2019-]+$", re.UNICODE)
 
-    Public entry point for callers that must settle whether a query is well
-    formed before deciding what else to do -- a dry run has to report a bad
-    query as a bad query, whatever it would otherwise have said about the
-    database.
+# FTS5 spells its operators in uppercase. A plain-looking query containing one
+# is an attempt at syntax that went wrong, not a title, and is left to fail.
+_FTS_KEYWORDS = frozenset({"AND", "OR", "NOT", "NEAR"})
+
+
+def _is_plain_text(query: str) -> bool:
+    """Whether ``query`` uses no FTS5 syntax and is therefore safe to quote.
+
+    Deliberately conservative: it answers "no" for anything carrying a
+    metacharacter, so the only queries it can rescue are ones where no
+    operator was intended. A mistyped column filter, an unbalanced phrase or
+    a bare operator all fail this test and keep their error.
     """
-    _validate_fts_query(query)
+    if not _PLAIN_TEXT_QUERY.match(query):
+        return False
+    if not any(character.isalnum() for character in query):
+        return False
+    return not (set(query.split()) & _FTS_KEYWORDS)
+
+
+def _as_term_query(query: str) -> str:
+    """Quote each word of ``query`` as its own FTS5 string literal.
+
+    Per word rather than one phrase over the whole query: the requirement is a
+    search for *those words*, so "Ender's Game" should find a book holding both
+    terms, not only one where they sit adjacent.
+    """
+    return " ".join('"' + word.replace('"', '""') + '"' for word in query.split())
+
+
+def resolve_query(query: str) -> str:
+    """Return the FTS5 expression to execute for ``query``.
+
+    Usually ``query`` itself. FTS5 reads an apostrophe as a string delimiter
+    and a hyphen as a column filter, so ordinary titles -- ``Ender's``,
+    ``Well-Tempered`` -- fail to parse as written even though the user
+    attempted no syntax. Those are requoted as literal terms.
+
+    The rewrite is only ever reached by a query that already failed, so no
+    query that works today changes meaning. And it is gated on
+    :func:`_is_plain_text`, so the malformed-syntax cases keep reporting the
+    error rather than quietly becoming a search that matches nothing.
+
+    Raises:
+        InvalidQueryError: if the query cannot be parsed and is not plain text.
+    """
+    try:
+        _validate_fts_query(query)
+    except InvalidQueryError:
+        if not _is_plain_text(query):
+            raise
+        requoted = _as_term_query(query)
+        # Validated in turn: quoting cannot introduce syntax, but the result is
+        # what will run, and running an unvalidated expression would put a
+        # database error and a query error back on the same footing.
+        _validate_fts_query(requoted)
+        logger.debug(f"Requoted unparseable plain-text query {query!r} as {requoted!r}")
+        return requoted
+    return query
+
+
+def validate_query(query: str) -> None:
+    """Raise :class:`InvalidQueryError` if ``query`` cannot be searched for.
+
+    Public entry point for callers that must settle whether a query is usable
+    before deciding what else to do -- a dry run has to report a bad query as a
+    bad query, whatever it would otherwise have said about the database. It
+    accepts exactly what :func:`search_books` accepts, requoting included, so
+    the two cannot disagree about which queries are searchable.
+    """
+    resolve_query(query)
 
 
 def get_database(db_path: str | Path, *, read_only: bool = False) -> "Database":
@@ -628,7 +697,8 @@ def search_books(db: "Database", query: str, limit: int | None = None) -> list[d
         List of book dictionaries matching the query.
 
     Raises:
-        InvalidQueryError: if ``query`` is not a parseable FTS5 expression.
+        InvalidQueryError: if ``query`` cannot be searched for -- neither
+            parseable as written nor rescuable as literal terms.
         sqlite3.OperationalError: if the database itself cannot serve the
             search (locked file, missing or corrupt index, schema drift).
     """
@@ -636,8 +706,10 @@ def search_books(db: "Database", query: str, limit: int | None = None) -> list[d
         limit = 20
 
     # Settle "is this query well formed?" before touching the real database,
-    # so the statement below can only fail for database reasons.
-    _validate_fts_query(query)
+    # so the statement below can only fail for database reasons. The resolved
+    # form is what runs: an ordinary title carrying an apostrophe or a hyphen
+    # does not parse as written and comes back requoted.
+    query = resolve_query(query)
 
     results = db.execute(
         """

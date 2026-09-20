@@ -310,6 +310,58 @@ def test_valid_query_forms_are_accepted(tmp_path, good_query):
     search_books(db, good_query)  # must not raise
 
 
+@pytest.mark.parametrize(
+    ("query", "expected_title"),
+    [
+        ("Ender's", "Ender's Game"),  # apostrophe: FTS5 reads it as a string delimiter
+        ("ender's", "Ender's Game"),  # matching stays case-insensitive
+        ("Ender\u2019s", "Ender's Game"),  # typographic apostrophe
+        ("Well-Tempered", "Well-Tempered Clavier"),  # hyphen: read as a column filter
+        ("Ender's Game", "Ender's Game"),  # both words, one of them punctuated
+    ],
+)
+def test_punctuation_in_an_ordinary_query_searches_for_those_words(tmp_path, query, expected_title):
+    """A title carrying an apostrophe or a hyphen is a search, not a syntax error.
+
+    Neither is an attempt at FTS5 syntax, so neither should surface the
+    engine's parse error at the user.
+    """
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(path="/library/enders-game.epub", title="Ender's Game"))
+    save_book(db, _book(path="/library/wtc.epub", title="Well-Tempered Clavier"))
+
+    results = search_books(db, query)
+
+    assert [book["title"] for book in results] == [expected_title]
+
+
+def test_requoting_does_not_rescue_malformed_syntax(tmp_path):
+    """The rescue must not swallow the errors this project reports on purpose.
+
+    Each of these is pinned by "Unparseable query"; turning them into a search
+    that matches nothing would read as "you own no such book" rather than "your
+    query is wrong".
+    """
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(title="Dune"))
+
+    for bad_query in ("badcol:Dune", "x.y:Dune", "{nope title}:Dune", '"unbalanced'):
+        with pytest.raises(InvalidQueryError):
+            search_books(db, bad_query)
+
+
+def test_a_term_that_only_looks_punctuated_still_finds_nothing(tmp_path):
+    """Requoting rescues the parse, not the match.
+
+    A well-formed search for a book that is not there is still no results --
+    the fallback must not widen the query into matching something else.
+    """
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(title="Dune"))
+
+    assert search_books(db, "Nobody's Business") == []
+
+
 def test_reopen_repairs_a_non_fts_books_fts_and_keeps_the_books(tmp_path):
     """A books_fts replaced by an ordinary table is rebuilt on the next open,
     with the book rows preserved and searchable again."""
