@@ -5,6 +5,7 @@ Provides database connection management and query functions
 for indexing and searching EPUB metadata using sqlite_utils.
 """
 
+import re
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -120,20 +121,21 @@ def _is_plain_text(query: str) -> bool:
         return False
     if not any(character.isalnum() for character in query):
         return False
-    # Compared on each word's alphanumeric core, not the raw word: now that
-    # punctuation no longer blocks the rescue on its own, `Dune OR, Foundation`
-    # would otherwise slip past as three literal terms and report no matches
-    # for a query that plainly reached for OR.
-    return not ({_word_core(word) for word in query.split()} & _FTS_KEYWORDS)
+    # Compared against the query's own tokens rather than its whitespace words:
+    # punctuation no longer blocks the rescue on its own, so `Dune OR,Foundation`
+    # would otherwise slip past as literal terms and report no matches for a
+    # query that plainly reached for OR.
+    return not (set(_tokens(query)) & _FTS_KEYWORDS)
 
 
-def _word_core(word: str) -> str:
-    """``word`` stripped of leading and trailing non-alphanumeric characters.
+def _tokens(query: str) -> list[str]:
+    """The alphanumeric runs of ``query``, the way FTS5 itself splits terms.
 
-    So ``OR,`` and ``AND.`` are recognised as the operators they were reaching
-    for, while ``Dune,`` and ``Mr.`` keep cores that are nothing of the kind.
+    Punctuation is a boundary, not part of a word, so an operator is found
+    wherever it appears -- ``OR,`` and ``OR,Foundation`` alike. Matching whole
+    runs rather than substrings keeps ``NOTORIOUS`` an ordinary word.
     """
-    return word.strip("".join(c for c in word if not c.isalnum()))
+    return re.findall(r"[^\W_]+", query, re.UNICODE)
 
 
 def _as_term_query(query: str) -> str:

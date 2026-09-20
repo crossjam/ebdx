@@ -348,19 +348,37 @@ def test_punctuation_in_an_ordinary_query_searches_for_those_words(tmp_path, que
 
 @pytest.mark.parametrize(
     "query",
-    ["Dune OR, Foundation", "Dune AND. Foundation", "Dune NOT/ Foundation", "OR,"],
+    [
+        "Dune OR, Foundation",  # trailing punctuation
+        "Dune AND. Foundation",
+        "Dune NOT/ Foundation",
+        "OR,",
+        "Dune OR,Foundation",  # joined to the next operand, no whitespace
+        "Dune OR/Foundation",
+        "Dune AND.Foundation",
+    ],
 )
 def test_an_operator_with_punctuation_attached_is_still_an_operator(tmp_path, query):
     """Punctuation no longer blocks the rescue on its own, so the keyword check
-    compares each word's alphanumeric core. Otherwise `Dune OR, Foundation`
-    slips past as three literal terms and reports no matches for a query that
-    plainly reached for OR."""
+    runs over the query's own tokens rather than its whitespace words.
+    Otherwise `Dune OR,Foundation` slips past as literal terms and reports no
+    matches for a query that plainly reached for OR."""
     db = get_database(str(tmp_path / "ebdx.db"))
     save_book(db, _book(title="Dune"))
     save_book(db, _book(path="/library/foundation.epub", title="Foundation"))
 
     with pytest.raises(InvalidQueryError):
         search_books(db, query)
+
+
+@pytest.mark.parametrize("title", ["NOTORIOUS", "R.A.N.D. Corporation", "Band of Brothers"])
+def test_a_word_merely_containing_an_operator_is_not_one(tmp_path, title):
+    """Whole tokens are matched, not substrings, so NOTORIOUS is a word and the
+    initials of R.A.N.D. are four separate tokens."""
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(path="/library/x.epub", title=title))
+
+    assert [book["title"] for book in search_books(db, title)] == [title]
 
 
 def test_a_lowercase_or_in_a_title_is_not_an_operator(tmp_path):
