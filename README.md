@@ -130,19 +130,20 @@ Note that `NEAR` is a function in FTS5, not an infix operator. The FTS3/4 spelli
 `Frank NEAR Herbert` parses without error but is read as three ordinary terms — one
 of them the word "near" — so it quietly matches nothing.
 
-Ordinary punctuation inside a title needs no escaping. FTS5 itself reads an
-apostrophe as a string delimiter and a hyphen as a column filter, so `Ender's` and
-`Well-Tempered` are not valid FTS5 expressions — but a query using no operator
-syntax at all is searched for as literal words instead of being rejected:
+Ordinary punctuation inside a title needs no escaping. FTS5 itself rejects
+`Ender's`, `Dune, Messiah` and `Mr. Mercedes` — an apostrophe opens a string, and
+commas and full stops are simply not part of its grammar — but a query using no
+operator syntax at all is searched for as literal words instead:
 
 ```console
 $ ebdx search "Ender's"
                           Search Results (1 found)
 ```
 
-That rescue applies only to queries carrying no FTS5 syntax. A query that reaches
-for an operator and gets it wrong still reports the error, rather than quietly
-matching nothing:
+The rescue applies only to queries carrying none of FTS5's own characters
+(`" : * ( ) { } ^ +`) and no leading `-`, since each of those may be deliberate
+syntax. A query that reaches for an operator and gets it wrong still reports the
+error rather than quietly matching nothing:
 
 ```console
 $ ebdx search 'badcol:Dune'

@@ -5,7 +5,6 @@ Provides database connection management and query functions
 for indexing and searching EPUB metadata using sqlite_utils.
 """
 
-import re
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -85,26 +84,39 @@ def _validate_fts_query(query: str) -> None:
         probe.close()
 
 
-# A query using no FTS5 syntax at all: word characters, whitespace, and the
-# punctuation that occurs *inside* ordinary words. Every FTS5 metacharacter is
-# excluded, so a query matching this cannot have been an attempt at syntax --
-# it is a title someone typed.
-_PLAIN_TEXT_QUERY = re.compile(r"^[\w\s'\u2019-]+$", re.UNICODE)
+# Characters FTS5 gives a meaning to: phrase quoting, column filters, prefix
+# and anchor, grouping, and phrase concatenation. Any query carrying one may be
+# an attempt at syntax, so none is ever requoted. Everything else -- commas,
+# full stops, ampersands, slashes -- has no meaning to FTS5 at all: such a
+# query is unparseable only because it is prose, which is exactly the case
+# worth rescuing.
+_FTS_METACHARACTERS = frozenset('":*(){}^+')
 
-# FTS5 spells its operators in uppercase. A plain-looking query containing one
-# is an attempt at syntax that went wrong, not a title, and is left to fail.
-_FTS_KEYWORDS = frozenset({"AND", "OR", "NOT", "NEAR"})
+# FTS5 spells its boolean operators in uppercase. A plain-looking query
+# carrying one is an attempt at syntax that went wrong, not a title.
+#
+# NEAR is deliberately absent: in FTS5 it is a function, so a real proximity
+# query contains "(" and is excluded above, while a bare NEAR is an ordinary
+# term -- which is why `Frank NEAR Herbert` matches nothing rather than
+# erroring. Treating it as a keyword would reject `Frank NEAR Herbert's`.
+_FTS_KEYWORDS = frozenset({"AND", "OR", "NOT"})
 
 
 def _is_plain_text(query: str) -> bool:
     """Whether ``query`` uses no FTS5 syntax and is therefore safe to quote.
 
-    Deliberately conservative: it answers "no" for anything carrying a
-    metacharacter, so the only queries it can rescue are ones where no
-    operator was intended. A mistyped column filter, an unbalanced phrase or
-    a bare operator all fail this test and keep their error.
+    Deliberately conservative: anything that could have been an operator keeps
+    its error, so a mistyped column filter, an unbalanced phrase or a bare
+    operator is still reported rather than quietly becoming a search that
+    matches nothing.
     """
-    if not _PLAIN_TEXT_QUERY.match(query):
+    if _FTS_METACHARACTERS & set(query):
+        return False
+    # A leading hyphen is FTS5's exclusion operator, so `-Dune` is plausibly a
+    # request to exclude rather than a title. Requoting it would search for the
+    # very term the user was trying to drop. Inside a word it is only ever
+    # punctuation, which is what rescues `Well-Tempered`.
+    if any(word.startswith("-") for word in query.split()):
         return False
     if not any(character.isalnum() for character in query):
         return False

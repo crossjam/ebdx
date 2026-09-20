@@ -10,6 +10,7 @@ updating in place, reporting inserted vs updated, and ``search_books``
 carrying the source path.
 """
 
+import contextlib
 import sqlite3
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from ebdx.db import (
     describe_pending_schema_work,
     get_database,
     plan_mode,
+    resolve_query,
     save_book,
     search_books,
     would_repair_search,
@@ -318,6 +320,9 @@ def test_valid_query_forms_are_accepted(tmp_path, good_query):
         ("Ender\u2019s", "Ender's Game"),  # typographic apostrophe
         ("Well-Tempered", "Well-Tempered Clavier"),  # hyphen: read as a column filter
         ("Ender's Game", "Ender's Game"),  # both words, one of them punctuated
+        ("Dune, Messiah", "Dune, Messiah"),  # comma
+        ("Mr. Mercedes", "Mr. Mercedes"),  # full stop
+        ("Rock & Roll", "Rock & Roll"),  # ampersand
     ],
 )
 def test_punctuation_in_an_ordinary_query_searches_for_those_words(tmp_path, query, expected_title):
@@ -327,12 +332,30 @@ def test_punctuation_in_an_ordinary_query_searches_for_those_words(tmp_path, que
     engine's parse error at the user.
     """
     db = get_database(str(tmp_path / "ebdx.db"))
-    save_book(db, _book(path="/library/enders-game.epub", title="Ender's Game"))
+    save_book(
+        db,
+        _book(path="/library/enders-game.epub", title="Ender's Game", author="Frank Herbert"),
+    )
     save_book(db, _book(path="/library/wtc.epub", title="Well-Tempered Clavier"))
+    save_book(db, _book(path="/library/messiah.epub", title="Dune, Messiah"))
+    save_book(db, _book(path="/library/mercedes.epub", title="Mr. Mercedes"))
+    save_book(db, _book(path="/library/rock.epub", title="Rock & Roll"))
 
     results = search_books(db, query)
 
     assert [book["title"] for book in results] == [expected_title]
+
+
+def test_a_bare_near_is_an_ordinary_term_not_an_operator(tmp_path):
+    """NEAR is a function in FTS5, so a real proximity query carries "(" and is
+    excluded as syntax. A bare NEAR is just a word -- `Frank NEAR Herbert`
+    matches nothing rather than erroring -- so it must not block the rescue."""
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(title="Ender's Game", author="Frank Herbert"))
+
+    # Must not raise: the apostrophe is rescued despite the bare NEAR.
+    assert search_books(db, "Frank NEAR Herbert's") == []
+    assert resolve_query("Frank NEAR Herbert's") == '"Frank" "NEAR" "Herbert\'s"'
 
 
 def test_requoting_does_not_rescue_malformed_syntax(tmp_path):
@@ -348,6 +371,32 @@ def test_requoting_does_not_rescue_malformed_syntax(tmp_path):
     for bad_query in ("badcol:Dune", "x.y:Dune", "{nope title}:Dune", '"unbalanced'):
         with pytest.raises(InvalidQueryError):
             search_books(db, bad_query)
+
+
+@pytest.mark.parametrize("query", ["-Dune", "- Dune", "-"])
+def test_a_leading_hyphen_is_an_exclusion_not_a_title(tmp_path, query):
+    """FTS5 reads a leading hyphen as exclusion, so requoting `-Dune` would
+    search for the very term the user was asking to drop. Inside a word the
+    hyphen is only punctuation, which is what rescues `Well-Tempered`."""
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(title="Dune"))
+
+    with pytest.raises(InvalidQueryError):
+        search_books(db, query)
+
+
+@pytest.mark.parametrize("query", ["Cosmos: A Personal Voyage", "Dune*", 'Say "Hello"'])
+def test_a_query_carrying_fts_syntax_is_never_requoted(tmp_path, query):
+    """A colon, a prefix star or a quote may be deliberate syntax, so a query
+    carrying one keeps whatever FTS5 makes of it rather than being rewritten."""
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(title="Dune"))
+
+    # Either FTS5 parses it as syntax and the query is used verbatim, or it is
+    # reported as a query error. What must never happen is a silent rewrite
+    # into a literal-term search.
+    with contextlib.suppress(InvalidQueryError):  # reported, not rewritten
+        assert resolve_query(query) == query
 
 
 def test_a_term_that_only_looks_punctuated_still_finds_nothing(tmp_path):
