@@ -278,17 +278,25 @@ def test_search_results_carry_the_source_path(tmp_path):
         "a OR OR b",  # doubled operator
         "^",  # bare anchor
         "* ",  # unknown special query
+        "-Dune",  # exclusion with nothing to exclude from
         "x.y:Dune",  # dotted column filter
         "badcol:Dune",  # unknown column filter
         "{nope title}:Dune",  # unknown column in a braced filter
     ],
 )
-def test_malformed_query_raises_invalid_query_error(tmp_path, bad_query):
+def test_malformed_expression_raises_invalid_query_error(tmp_path, bad_query):
+    """Asking for FTS5 syntax means asking for its errors too.
+
+    A user who passes ``fts`` is writing an expression, so one the engine
+    cannot parse is reported rather than quietly becoming a search that
+    matches nothing -- "you own no such book" would be the wrong answer to a
+    mistyped column filter.
+    """
     db = get_database(str(tmp_path / "ebdx.db"))
     save_book(db, _book(path="/library/dune.epub", title="Dune"))
 
     with pytest.raises(InvalidQueryError):
-        search_books(db, bad_query)
+        search_books(db, bad_query, fts=True)
 
 
 @pytest.mark.parametrize(
@@ -304,12 +312,24 @@ def test_malformed_query_raises_invalid_query_error(tmp_path, bad_query):
         "-series:Chronicles title:Dune",
     ],
 )
-def test_valid_query_forms_are_accepted(tmp_path, good_query):
+def test_expression_forms_are_accepted_under_fts(tmp_path, good_query):
     """The validator must not reject legitimate FTS5 syntax."""
     db = get_database(str(tmp_path / "ebdx.db"))
     save_book(db, _book(path="/library/dune.epub", title="Dune", author="Frank Herbert"))
 
-    search_books(db, good_query)  # must not raise
+    search_books(db, good_query, fts=True)  # must not raise
+
+
+def test_an_expression_filters_on_the_column_it_names(tmp_path):
+    """Not merely parseable under the flag: interpreted."""
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(path="/library/dune.epub", title="Dune", author="Frank Herbert"))
+    save_book(db, _book(path="/library/about.epub", title="On Herbert", author="A Critic"))
+
+    assert [book["title"] for book in search_books(db, "author:Herbert", fts=True)] == ["Dune"]
+    assert [book["title"] for book in search_books(db, "Herbert NOT Dune", fts=True)] == [
+        "On Herbert"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -323,6 +343,8 @@ def test_valid_query_forms_are_accepted(tmp_path, good_query):
         ("Dune, Messiah", "Dune, Messiah"),  # comma
         ("Mr. Mercedes", "Mr. Mercedes"),  # full stop
         ("Rock & Roll", "Rock & Roll"),  # ampersand
+        ("R_AND_D, Inc.", "R_AND_D, Inc."),  # underscore: a bareword character to FTS5
+        ("Moby-Dick; or, The Whale", "Moby-Dick; or, The Whale"),  # semicolon and a stray `or`
     ],
 )
 def test_punctuation_in_an_ordinary_query_searches_for_those_words(tmp_path, query, expected_title):
@@ -340,6 +362,8 @@ def test_punctuation_in_an_ordinary_query_searches_for_those_words(tmp_path, que
     save_book(db, _book(path="/library/messiah.epub", title="Dune, Messiah"))
     save_book(db, _book(path="/library/mercedes.epub", title="Mr. Mercedes"))
     save_book(db, _book(path="/library/rock.epub", title="Rock & Roll"))
+    save_book(db, _book(path="/library/rnd.epub", title="R_AND_D, Inc."))
+    save_book(db, _book(path="/library/moby.epub", title="Moby-Dick; or, The Whale"))
 
     results = search_books(db, query)
 
@@ -349,100 +373,149 @@ def test_punctuation_in_an_ordinary_query_searches_for_those_words(tmp_path, que
 @pytest.mark.parametrize(
     "query",
     [
-        "Dune OR, Foundation",  # trailing punctuation
-        "Dune AND. Foundation",
-        "Dune NOT/ Foundation",
+        "AND",  # a bare operator
         "OR,",
-        "Dune OR,Foundation",  # joined to the next operand, no whitespace
-        "Dune OR/Foundation",
+        "Dune OR Foundation",  # a spelled-out boolean
+        "Dune OR,Foundation",  # an operator with punctuation attached
         "Dune AND.Foundation",
+        "-Dune",  # FTS5's exclusion operator
+        "badcol:Dune",  # a column filter, mistyped or not
+        "x.y:Dune",
+        "{nope title}:Dune",
+        '"unbalanced',  # an unterminated string
+        "NEAR(",
+        "^",
+        "* ",
     ],
 )
-def test_an_operator_with_punctuation_attached_is_still_an_operator(tmp_path, query):
-    """Punctuation no longer blocks the rescue on its own, so the keyword check
-    runs over the query's own tokens rather than its whitespace words.
-    Otherwise `Dune OR,Foundation` slips past as literal terms and reports no
-    matches for a query that plainly reached for OR."""
+def test_operator_like_text_is_literal_by_default(tmp_path, query):
+    """No input is malformed in literal mode, whatever it looks like.
+
+    Each of these is reported as a query error under ``fts``, which is where
+    the user has said they are writing an expression. Typed as plain text they
+    are words, and the search runs.
+    """
     db = get_database(str(tmp_path / "ebdx.db"))
     save_book(db, _book(title="Dune"))
     save_book(db, _book(path="/library/foundation.epub", title="Foundation"))
 
-    with pytest.raises(InvalidQueryError):
-        search_books(db, query)
+    search_books(db, query)  # must not raise
 
 
-@pytest.mark.parametrize("title", ["NOTORIOUS", "R.A.N.D. Corporation", "Band of Brothers"])
+@pytest.mark.parametrize(
+    "title", ["NOTORIOUS", "R.A.N.D. Corporation", "Band of Brothers", "R_AND_D, Inc."]
+)
 def test_a_word_merely_containing_an_operator_is_not_one(tmp_path, title):
-    """Whole tokens are matched, not substrings, so NOTORIOUS is a word and the
-    initials of R.A.N.D. are four separate tokens."""
+    """A title is searched for whether or not an operator hides inside it.
+
+    Nothing inspects the query for operator spellings any more, so NOTORIOUS,
+    the initials of R.A.N.D. and the underscores of R_AND_D are all just text.
+    """
     db = get_database(str(tmp_path / "ebdx.db"))
     save_book(db, _book(path="/library/x.epub", title=title))
 
     assert [book["title"] for book in search_books(db, title)] == [title]
 
 
-def test_a_lowercase_or_in_a_title_is_not_an_operator(tmp_path):
-    """FTS5 operators are uppercase, so the comma-and-`or` of a real title --
-    `Moby-Dick; or, The Whale` -- must still be rescued."""
-    db = get_database(str(tmp_path / "ebdx.db"))
-    save_book(db, _book(path="/library/moby.epub", title="Moby-Dick; or, The Whale"))
-
-    results = search_books(db, "Moby-Dick; or, The Whale")
-
-    assert [book["title"] for book in results] == ["Moby-Dick; or, The Whale"]
-
-
 def test_a_bare_near_is_an_ordinary_term_not_an_operator(tmp_path):
-    """NEAR is a function in FTS5, so a real proximity query carries "(" and is
-    excluded as syntax. A bare NEAR is just a word -- `Frank NEAR Herbert`
-    matches nothing rather than erroring -- so it must not block the rescue."""
+    """A literal query quotes every word, NEAR included.
+
+    So `Frank NEAR Herbert's` searches for three words and matches nothing,
+    rather than erroring on the apostrophe or reaching for proximity syntax.
+    """
     db = get_database(str(tmp_path / "ebdx.db"))
     save_book(db, _book(title="Ender's Game", author="Frank Herbert"))
 
-    # Must not raise: the apostrophe is rescued despite the bare NEAR.
     assert search_books(db, "Frank NEAR Herbert's") == []
     assert resolve_query("Frank NEAR Herbert's") == '"Frank" "NEAR" "Herbert\'s"'
 
 
-def test_requoting_does_not_rescue_malformed_syntax(tmp_path):
-    """The rescue must not swallow the errors this project reports on purpose.
+def test_the_same_text_is_a_search_by_default_and_an_error_under_fts(tmp_path):
+    """The one query, read two ways, because the user says which.
 
-    Each of these is pinned by "Unparseable query"; turning them into a search
-    that matches nothing would read as "you own no such book" rather than "your
-    query is wrong".
+    Literal text cannot be malformed, so these are searches. Under ``fts``
+    they are the errors this project reports on purpose, pinned by
+    "Unparseable query".
     """
     db = get_database(str(tmp_path / "ebdx.db"))
     save_book(db, _book(title="Dune"))
 
-    for bad_query in ("badcol:Dune", "x.y:Dune", "{nope title}:Dune", '"unbalanced'):
+    for query in ("badcol:Dune", "x.y:Dune", "{nope title}:Dune", '"unbalanced'):
+        search_books(db, query)  # must not raise
         with pytest.raises(InvalidQueryError):
-            search_books(db, bad_query)
+            search_books(db, query, fts=True)
 
 
-@pytest.mark.parametrize("query", ["-Dune", "- Dune", "-"])
-def test_a_leading_hyphen_is_an_exclusion_not_a_title(tmp_path, query):
-    """FTS5 reads a leading hyphen as exclusion, so requoting `-Dune` would
-    search for the very term the user was asking to drop. Inside a word the
-    hyphen is only punctuation, which is what rescues `Well-Tempered`."""
+@pytest.mark.parametrize("query", ["-Dune", "- Dune"])
+def test_a_leading_hyphen_is_literal_text_by_default(tmp_path, query):
+    """The bug that started the heuristic, settled by the flag instead.
+
+    A blanket requote of `-Dune` searched for the very term the user was
+    asking to drop. Here nothing is guessed: plain text finds the book, and
+    the exclusion operator lives under ``fts``, where the user asked for it.
+    """
     db = get_database(str(tmp_path / "ebdx.db"))
     save_book(db, _book(title="Dune"))
+    save_book(db, _book(path="/library/foundation.epub", title="Foundation"))
 
-    with pytest.raises(InvalidQueryError):
-        search_books(db, query)
+    assert [book["title"] for book in search_books(db, query)] == ["Dune"]
+    assert [book["title"] for book in search_books(db, "Dune OR Foundation", fts=True)] == [
+        "Dune",
+        "Foundation",
+    ]
+    assert [book["title"] for book in search_books(db, "Foundation NOT Dune", fts=True)] == [
+        "Foundation"
+    ]
 
 
 @pytest.mark.parametrize("query", ["Cosmos: A Personal Voyage", "Dune*", 'Say "Hello"'])
-def test_a_query_carrying_fts_syntax_is_never_requoted(tmp_path, query):
-    """A colon, a prefix star or a quote may be deliberate syntax, so a query
-    carrying one keeps whatever FTS5 makes of it rather than being rewritten."""
+def test_an_expression_is_passed_through_verbatim(tmp_path, query):
+    """Under ``fts`` the user is writing FTS5, so nothing rewrites the query:
+    it runs as typed, or the engine's error is reported."""
     db = get_database(str(tmp_path / "ebdx.db"))
     save_book(db, _book(title="Dune"))
 
-    # Either FTS5 parses it as syntax and the query is used verbatim, or it is
-    # reported as a query error. What must never happen is a silent rewrite
-    # into a literal-term search.
     with contextlib.suppress(InvalidQueryError):  # reported, not rewritten
-        assert resolve_query(query) == query
+        assert resolve_query(query, fts=True) == query
+
+
+def test_literal_queries_quote_every_word(tmp_path):
+    """The whole of the default mode, in one line: quoted per word, ANDed."""
+    assert resolve_query("Dune*") == '"Dune*"'
+    assert resolve_query('Say "Hello"') == '"Say" """Hello"""'
+    assert resolve_query("R_AND_D, Inc.") == '"R_AND_D," "Inc."'
+
+
+def test_multi_word_queries_match_words_in_any_position(tmp_path):
+    """Words are quoted one by one and ANDed, never run together into a phrase.
+
+    A phrase would silently narrow the search to adjacent occurrences, so a
+    book holding both words apart would stop matching.
+    """
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(
+        db,
+        _book(path="/library/hitchhiker.epub", title="The Hitchhiker's Guide to the Galaxy"),
+    )
+    save_book(db, _book(title="Dune", author="Frank Herbert"))
+
+    # Non-adjacent in the title, and in the other order than they appear.
+    assert [book["title"] for book in search_books(db, "Galaxy Hitchhiker's")] == [
+        "The Hitchhiker's Guide to the Galaxy"
+    ]
+    # Across two columns at once.
+    assert [book["title"] for book in search_books(db, "Herbert Dune")] == ["Dune"]
+
+
+@pytest.mark.parametrize("query", ["", "   "])
+def test_a_query_with_no_words_finds_nothing_rather_than_erroring(tmp_path, query):
+    """A query holding no words resolves to an empty expression, which FTS5
+    rejects. There is nothing to match and nothing malformed about asking, so
+    it is an empty result -- and never a database error."""
+    db = get_database(str(tmp_path / "ebdx.db"))
+    save_book(db, _book(title="Dune"))
+
+    assert search_books(db, query) == []
 
 
 def test_a_term_that_only_looks_punctuated_still_finds_nothing(tmp_path):
@@ -503,7 +576,7 @@ def test_repair_refills_every_stored_book(tmp_path):
 
     reopened = get_database(str(db_path))
 
-    found = {hit["title"] for hit in search_books(reopened, "Book0 OR Book4")}
+    found = {hit["title"] for hit in search_books(reopened, "Book0 OR Book4", fts=True)}
     assert found == {"Book0", "Book4"}
     assert _match_count(reopened, "Book2") == 1
 
@@ -587,7 +660,10 @@ def test_a_real_column_filter_still_searches(tmp_path):
     db = get_database(str(tmp_path / "ebdx.db"))
     save_book(db, _book(path="/library/dune.epub", title="Dune"))
 
-    assert [hit["title"] for hit in search_books(db, "title:Dune")] == ["Dune"]
+    assert [hit["title"] for hit in search_books(db, "title:Dune", fts=True)] == ["Dune"]
+    # Without the flag the same text is four literal characters and a word,
+    # which no book carries.
+    assert search_books(db, "title:Dune") == []
 
 
 def test_missing_regular_table_column_is_not_masked_as_a_bad_query(tmp_path):

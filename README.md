@@ -77,7 +77,7 @@ A file that cannot be read is counted under `Failed` and the run continues.
 | --- | --- |
 | `ebdx discover [PATHS...]` | List the `.epub` files under one or more paths, without touching a database |
 | `ebdx index ROOT` | Scan `ROOT` recursively, extract metadata, and store it |
-| `ebdx search QUERY` | Full-text search over indexed metadata |
+| `ebdx search QUERY` | Full-text search over indexed metadata (literal text; `--fts` for FTS5 syntax) |
 | `ebdx schema` | Print the tables, indexes, and triggers in the database |
 | `ebdx about` | Show version, summary, and where data is stored |
 | `ebdx version` | Print the version |
@@ -91,7 +91,9 @@ Global options, which go before the subcommand:
 By default only warnings and errors are logged. Command results are printed regardless.
 
 `index`, `search`, and `schema` accept `-d/--database PATH` to use a database other
-than the default. `search` also takes `-l/--limit N` (default 20).
+than the default. `search` also takes `-l/--limit N` (default 20) and
+`--fts`/`--raw`, which reads the query as an FTS5 expression instead of literal
+text ([search](#search)).
 
 ### discover
 
@@ -113,43 +115,73 @@ $ ebdx discover ~/books
 
 ### search
 
-Queries use [SQLite FTS5 syntax](https://www.sqlite.org/fts5.html#full_text_query_syntax)
-over the indexed columns `title`, `author`, `series`, and `tags`:
+A query is **literal text**. Its words are searched for together across the indexed
+columns `title`, `author`, `series`, and `tags`, and a book matches when it carries
+all of them — in any column, adjacent or not:
 
 ```console
-$ ebdx search "Dune"                    # bare term
-$ ebdx search "title:Dune"              # one column
-$ ebdx search "{title author}:Herbert"  # several columns
-$ ebdx search "Dune OR Foundation"      # boolean
-$ ebdx search "NEAR(Frank Herbert, 5)"  # proximity
-$ ebdx search "Found*"                  # prefix
-$ ebdx search '"Frank Herbert"'         # exact phrase
+$ ebdx search "Dune"
+$ ebdx search "Herbert Dune"      # both words, wherever they sit
 ```
 
-Note that `NEAR` is a function in FTS5, not an infix operator. The FTS3/4 spelling
-`Frank NEAR Herbert` parses without error but is read as three ordinary terms — one
-of them the word "near" — so it quietly matches nothing.
-
-Ordinary punctuation inside a title needs no escaping. FTS5 itself rejects
-`Ender's`, `Dune, Messiah` and `Mr. Mercedes` — an apostrophe opens a string, and
-commas and full stops are simply not part of its grammar — but a query using no
-operator syntax at all is searched for as literal words instead:
+Punctuation is part of the words, so nothing needs escaping and no title can be
+rejected as a bad query:
 
 ```console
 $ ebdx search "Ender's"
                           Search Results (1 found)
 ```
 
-The rescue applies only to queries carrying none of FTS5's own characters
-(`" : * ( ) { } ^ +`) and no leading `-`, since each of those may be deliberate
-syntax. A query that reaches for an operator and gets it wrong still reports the
-error rather than quietly matching nothing:
+`Dune, Messiah`, `Mr. Mercedes`, `Moby-Dick; or, The Whale` and `R_AND_D, Inc.` are
+all ordinary queries. So is anything that merely looks like syntax — `AND`, `-Dune`,
+`badcol:Dune`, an unbalanced quote — which is searched for rather than interpreted
+or refused.
+
+A query *starting* with `-` is the one that needs help, and not from the search
+engine: the shell convention is that a leading dash introduces an option, so `ebdx`
+reads it as one before the query is ever looked at. Separate it with `--`, as with
+any other command:
 
 ```console
-$ ebdx search 'badcol:Dune'
+$ ebdx search -- "-Dune"
+```
+
+#### Expression syntax: `--fts`
+
+Pass `--fts` (or `--raw`) to write
+[SQLite FTS5 syntax](https://www.sqlite.org/fts5.html#full_text_query_syntax) instead.
+The query reaches the engine exactly as typed:
+
+```console
+$ ebdx search --fts "title:Dune"              # one column
+$ ebdx search --fts "{title author}:Herbert"  # several columns
+$ ebdx search --fts "Dune OR Foundation"      # boolean
+$ ebdx search --fts "NEAR(Frank Herbert, 5)"  # proximity
+$ ebdx search --fts "Found*"                  # prefix
+$ ebdx search --fts '"Frank Herbert"'         # exact phrase
+$ ebdx search --fts "-series:Chronicles title:Dune"  # exclude a column
+```
+
+Note that `NEAR` is a function in FTS5, not an infix operator. The FTS3/4 spelling
+`Frank NEAR Herbert` parses without error but is read as three ordinary terms — one
+of them the word "near" — so it quietly matches nothing.
+
+Under the flag the engine's errors are yours too: a query FTS5 cannot parse is
+reported and exits non-zero, rather than quietly matching nothing.
+
+```console
+$ ebdx search --fts 'badcol:Dune'
 Invalid search query: no such column: badcol
 Aborted!
+
+$ ebdx search 'badcol:Dune'      # without the flag, an ordinary search
+No results found.
 ```
+
+Why the default is literal: FTS5's grammar claims `"`, `:`, `*`, `(`, `)`, `{`, `}`,
+`^`, `+` and a leading `-`, and rejects most other punctuation outright, so ordinary
+titles fail to parse as expressions. Guessing which of the two a user meant needs a
+copy of FTS5's lexer, and a copy drifts. Asking is cheaper and cannot be wrong.
 
 ### Dry run
 
