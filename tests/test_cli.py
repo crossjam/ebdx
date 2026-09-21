@@ -225,6 +225,51 @@ def test_a_query_starting_with_a_dash_is_searched_for_after_a_separator(
     assert "Dune" in result.output
 
 
+def test_an_expression_starting_with_a_dash_runs_after_a_separator(runner, tmp_path, make_epub):
+    """`--` is not only for literal text: a column filter is where it bites.
+
+    An FTS5 expression beginning with `-` is claimed by option parsing exactly
+    like any other dashed token, so the documented form has to carry the
+    separator to reach the engine at all.
+    """
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Dune", "author": "Herbert"}])
+
+    result = runner.invoke(
+        cli,
+        ["search", "--fts", "--database", str(db_path), "--", "-series:Chronicles title:Dune"],
+    )
+
+    assert "No such option" not in result.output
+    assert result.exit_code == 0, result.output
+
+    # And the exclusion the README documents alongside it does exclude.
+    excluded = runner.invoke(
+        cli, ["search", "--fts", "title:Dune NOT series:Chronicles", "--database", str(db_path)]
+    )
+
+    assert excluded.exit_code == 0, excluded.output
+    assert "1 found" in excluded.output
+
+
+@pytest.mark.parametrize("query", ["", "   "])
+@pytest.mark.parametrize("dry_run", [False, True], ids=["real", "dry-run"])
+def test_a_query_with_no_words_finds_nothing_in_either_mode(
+    runner, tmp_path, make_epub, query, dry_run
+):
+    """A query holding no words resolves to an empty FTS5 expression, which the
+    engine rejects. That must never surface as database damage: there is
+    nothing to match and nothing malformed about asking, in either mode."""
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Dune", "author": "Herbert"}])
+    prefix = ["--dry-run"] if dry_run else []
+
+    result = runner.invoke(cli, [*prefix, "search", query, "--database", str(db_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "No results found" in result.output
+    assert "Database error" not in result.output
+    assert "Invalid search query" not in result.output
+
+
 def test_search_still_reports_a_mistyped_column_filter_under_fts(runner, tmp_path, make_epub):
     """Under the flag the user is writing syntax, so a wrong filter is an error
     rather than a silent empty result reading as "you own no such book"."""

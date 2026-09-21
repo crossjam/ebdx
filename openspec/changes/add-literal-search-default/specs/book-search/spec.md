@@ -40,6 +40,12 @@ prefixes, proximity and phrases.
 - **WHEN** a multi-word query is issued without the expression option
 - **THEN** a book containing all of those words matches, whether or not they are adjacent
 
+#### Scenario: A query holding no words matches nothing
+
+- **WHEN** a query that is empty or contains only whitespace is issued without the expression
+  option
+- **THEN** no books are returned, no error is reported, and the exit status is zero
+
 ## MODIFIED Requirements
 
 ### Requirement: Malformed queries do not crash

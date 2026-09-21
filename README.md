@@ -159,8 +159,19 @@ $ ebdx search --fts "Dune OR Foundation"      # boolean
 $ ebdx search --fts "NEAR(Frank Herbert, 5)"  # proximity
 $ ebdx search --fts "Found*"                  # prefix
 $ ebdx search --fts '"Frank Herbert"'         # exact phrase
-$ ebdx search --fts "-series:Chronicles title:Dune"  # exclude a column
+$ ebdx search --fts "title:Dune NOT series:Chronicles"  # exclude matches
 ```
+
+The `--` rule above applies here too, and a column filter is where it bites: an
+expression *beginning* with `-` is read as an option before the search sees it.
+
+```console
+$ ebdx search --fts -- "-series:Chronicles title:Dune"
+```
+
+That form searches every column but `series` for "Chronicles", and still requires
+`title:Dune` — it does not drop books in the series, which is what `NOT` above is
+for.
 
 Note that `NEAR` is a function in FTS5, not an infix operator. The FTS3/4 spelling
 `Frank NEAR Herbert` parses without error but is read as three ordinary terms — one
