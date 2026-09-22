@@ -69,8 +69,10 @@ who sees a path they did not type next to the option that carried it has the who
 
 The hint belongs wherever argument parsing reports a rejected command line, so it is added
 once, at the command class that renders usage errors, and applies to every subcommand. It
-fires when the rejected command line carries a token beginning with a single dash — which is
-a fact about the input, not an inference about intent.
+fires when the rejected command line carries a token beginning with a dash, one dash or two
+— which is a fact about the input, not an inference about intent. Both shapes need it: a
+short option can absorb the rest of its token as a value, and `--Dune` is read as a long
+option. The `--` separator itself is not such a token.
 
 **Alternative rejected:** `ignore_unknown_options`, so unknown dashed tokens fall through to
 the argument. It fixes only the tokens that are *not* options: `-d` and `-l` are known, so

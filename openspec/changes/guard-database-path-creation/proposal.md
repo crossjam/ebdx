@@ -28,8 +28,8 @@ argument parsing, and `index` is where it leaves a file behind.
   becomes `No database found at: une (given as -d/--database)`, so a swallowed option is
   visible at the point of failure rather than looking like a missing library.
 - **A usage error involving a dashed token mentions `--`.** When argument parsing rejects a
-  token beginning with a single dash, the error carries a line explaining that text is
-  separated from options with `--`.
+  token beginning with a dash — one dash or two, the `--` separator itself excepted — the
+  error carries a line explaining that text is separated from options with `--`.
 - **BREAKING** (narrowly): `ebdx index ~/books -d mylibrary` no longer creates `mylibrary`;
   it reports the refusal and asks for a name ending in a database suffix. Creating the same
   database as `mylibrary.db` works, and an existing `mylibrary` is still opened.
