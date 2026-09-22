@@ -38,6 +38,34 @@ def runner() -> CliRunner:
     return CliRunner()
 
 
+def _save_series_book(db_path, *, title, series, author="Frank Herbert"):
+    """Add one book carrying a series directly to an indexed database.
+
+    ``make_epub`` has no series argument, and series metadata does not survive
+    a round trip through the EPUB writer, so a test that needs a series states
+    it at the store instead.
+    """
+    from ebdx.db import get_database, save_book
+
+    db = get_database(str(db_path))
+    save_book(
+        db,
+        {
+            "path": f"/library/{title.lower().replace(' ', '-')}.epub",
+            "title": title,
+            "author": author,
+            "series": series,
+            "series_index": 1.0,
+            "publisher": "",
+            "published": "",
+            "isbn": "",
+            "language": "en",
+            "tags": "",
+        },
+    )
+    db.conn.close()
+
+
 def _index_library(runner, tmp_path, make_epub, books):
     """Build a library of EPUBs and index it into a tmp database.
 
@@ -233,6 +261,10 @@ def test_an_expression_starting_with_a_dash_runs_after_a_separator(runner, tmp_p
     separator to reach the engine at all.
     """
     db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Dune", "author": "Herbert"}])
+    # A second Dune, this one in the series the exclusion names. Written
+    # straight to the store because the EPUB fixture carries no series field,
+    # and the claim under test is FTS5's, not the extractor's.
+    _save_series_book(db_path, title="Dune Chronicles", series="Chronicles")
 
     result = runner.invoke(
         cli,
@@ -242,6 +274,13 @@ def test_an_expression_starting_with_a_dash_runs_after_a_separator(runner, tmp_p
     assert "No such option" not in result.output
     assert result.exit_code == 0, result.output
 
+    # Both books answer the unfiltered query, so the exclusion below has
+    # something to remove -- without this the NOT could do nothing and still
+    # look right.
+    both = runner.invoke(cli, ["search", "--fts", "title:Dune", "--database", str(db_path)])
+
+    assert "2 found" in both.output, both.output
+
     # And the exclusion the README documents alongside it does exclude.
     excluded = runner.invoke(
         cli, ["search", "--fts", "title:Dune NOT series:Chronicles", "--database", str(db_path)]
@@ -249,6 +288,7 @@ def test_an_expression_starting_with_a_dash_runs_after_a_separator(runner, tmp_p
 
     assert excluded.exit_code == 0, excluded.output
     assert "1 found" in excluded.output
+    assert "Chronicles" not in excluded.output
 
 
 @pytest.mark.parametrize("query", ["", "   "])
