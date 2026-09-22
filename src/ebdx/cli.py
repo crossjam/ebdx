@@ -387,17 +387,31 @@ def index(ctx: click.Context, root: Path, database):
     show_default=True,
     help="Maximum number of results to return",
 )
+@click.option(
+    "--fts",
+    "--raw",
+    "fts",
+    is_flag=True,
+    help="Read QUERY as an FTS5 expression instead of literal text",
+)
 @click.pass_context
-def search(ctx: click.Context, query: str, database, limit: int):
+def search(ctx: click.Context, query: str, database, limit: int, fts: bool):
     """Search for indexed eBooks using full-text search.
 
     Searches across title, author, and series fields using SQLite FTS5.
+
+    QUERY is literal text: its words are searched for together, and any
+    punctuation in it -- an apostrophe, a hyphen, a comma -- is part of the
+    words rather than syntax. Pass --fts (or --raw) to write an FTS5
+    expression instead, with column filters, boolean operators and phrases.
 
     Example:
 
     \b
         ebdx search "Dune"
+        ebdx search "Ender's Game"
         ebdx search "Asimov" --limit 10
+        ebdx search --fts "title:Dune NOT series:Chronicles"
     """
     from ebdx.db import InvalidQueryError, search_books, validate_query
 
@@ -427,11 +441,13 @@ def search(ctx: click.Context, query: str, database, limit: int):
     if dry_run:
         _reject_unrecognised(database, db)
 
-    # Then the query: one that cannot be parsed is a query error whatever else
-    # the database turns out to need, and it must be settled before the
-    # dry-run reporting below.
+    # Then the query: under --fts one that cannot be parsed is a query error
+    # whatever else the database turns out to need, and it must be settled
+    # before the dry-run reporting below. Literal text is always searchable, so
+    # this is a no-op there -- the preflight and the real search below are
+    # given the same flag precisely so they cannot disagree about that.
     try:
-        validate_query(query)
+        validate_query(query, fts=fts)
     except InvalidQueryError as e:
         _abort_invalid_query(e)
 
@@ -450,7 +466,7 @@ def search(ctx: click.Context, query: str, database, limit: int):
             return
         repairable = _inspect(database, would_repair_search, db)
     try:
-        results = search_books(db, query, limit=limit)
+        results = search_books(db, query, limit=limit, fts=fts)
     except InvalidQueryError as e:  # pragma: no cover - settled above
         _abort_invalid_query(e)
     except sqlite3.DatabaseError as e:

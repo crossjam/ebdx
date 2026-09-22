@@ -84,15 +84,62 @@ def _validate_fts_query(query: str) -> None:
         probe.close()
 
 
-def validate_query(query: str) -> None:
-    """Raise :class:`InvalidQueryError` if FTS5 cannot parse ``query``.
+def _as_term_query(query: str) -> str:
+    """Quote each word of ``query`` as its own FTS5 string literal.
 
-    Public entry point for callers that must settle whether a query is well
-    formed before deciding what else to do -- a dry run has to report a bad
-    query as a bad query, whatever it would otherwise have said about the
-    database.
+    Per word rather than one phrase over the whole query: the requirement is a
+    search for *those words*, so "Ender's Game" should find a book holding both
+    terms, not only one where they sit adjacent.
+
+    Quoting is what makes any text searchable. Inside an FTS5 string literal
+    every character but ``"`` is ordinary, so a comma, a full stop, a leading
+    hyphen, a colon or an underscore is simply part of the term, and an
+    embedded quote survives as a doubled one. A query holding no words at all
+    yields the empty string, which is not an expression FTS5 accepts -- see
+    :func:`search_books`, which treats it as a search with nothing to match.
     """
+    return " ".join('"' + word.replace('"', '""') + '"' for word in query.split())
+
+
+def resolve_query(query: str, *, fts: bool = False) -> str:
+    """Return the FTS5 expression to execute for ``query``.
+
+    By default ``query`` is literal text: each of its words is quoted as an
+    FTS5 string literal and the words are ANDed, so any text whatsoever is
+    searchable and no ordinary title can be reported as a malformed query.
+    Under ``fts`` the query is an expression and is passed through as written,
+    giving a caller who asked for it the engine's own syntax -- column filters,
+    boolean operators, prefixes, proximity and phrases.
+
+    Nothing here infers which of the two the user meant. The caller says which,
+    because the alternative is a second copy of FTS5's lexer that drifts from
+    the original and turns a missed corner into a silent wrong answer.
+
+    Args:
+        query: The search text.
+        fts: Read ``query`` as an FTS5 expression rather than as literal text.
+
+    Raises:
+        InvalidQueryError: under ``fts`` only, when FTS5 cannot parse ``query``.
+    """
+    if not fts:
+        return _as_term_query(query)
     _validate_fts_query(query)
+    return query
+
+
+def validate_query(query: str, *, fts: bool = False) -> None:
+    """Raise :class:`InvalidQueryError` if ``query`` cannot be searched for.
+
+    Public entry point for callers that must settle whether a query is usable
+    before deciding what else to do -- a dry run has to report a bad query as a
+    bad query, whatever it would otherwise have said about the database. It
+    accepts exactly what :func:`search_books` accepts, so the two cannot
+    disagree about which queries are searchable.
+
+    Literal text cannot be malformed, so this is a no-op unless ``fts`` is set.
+    """
+    resolve_query(query, fts=fts)
 
 
 def get_database(db_path: str | Path, *, read_only: bool = False) -> "Database":
@@ -616,28 +663,40 @@ def save_book(db: "Database", book_data: dict) -> SavedBook:
     return result
 
 
-def search_books(db: "Database", query: str, limit: int | None = None) -> list[dict]:
+def search_books(
+    db: "Database", query: str, limit: int | None = None, *, fts: bool = False
+) -> list[dict]:
     """Search for books using FTS5 full-text search.
 
     Args:
         db: The database connection.
-        query: The search query string.
+        query: The search query string, literal text unless ``fts`` is set.
         limit: Maximum number of results to return.
+        fts: Read ``query`` as an FTS5 expression rather than as literal text.
 
     Returns:
         List of book dictionaries matching the query.
 
     Raises:
-        InvalidQueryError: if ``query`` is not a parseable FTS5 expression.
+        InvalidQueryError: under ``fts`` only, when FTS5 cannot parse ``query``.
+            Literal text is always searchable.
         sqlite3.OperationalError: if the database itself cannot serve the
             search (locked file, missing or corrupt index, schema drift).
     """
     if limit is None:
         limit = 20
 
-    # Settle "is this query well formed?" before touching the real database,
-    # so the statement below can only fail for database reasons.
-    _validate_fts_query(query)
+    # Settle the query before touching the real database, so the statement
+    # below can only fail for database reasons. The resolved form is what runs:
+    # literal text arrives here quoted term by term, an expression as written.
+    query = resolve_query(query, fts=fts)
+
+    # A query holding no words resolves to the empty expression, which FTS5
+    # rejects. There is nothing to match and nothing malformed about asking,
+    # so it is an empty result rather than an error -- and answering here keeps
+    # the error that would otherwise surface from reading as a database fault.
+    if not query:
+        return []
 
     results = db.execute(
         """

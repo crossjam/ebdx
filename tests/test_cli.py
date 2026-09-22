@@ -38,6 +38,34 @@ def runner() -> CliRunner:
     return CliRunner()
 
 
+def _save_series_book(db_path, *, title, series, author="Frank Herbert"):
+    """Add one book carrying a series directly to an indexed database.
+
+    ``make_epub`` has no series argument, and series metadata does not survive
+    a round trip through the EPUB writer, so a test that needs a series states
+    it at the store instead.
+    """
+    from ebdx.db import get_database, save_book
+
+    db = get_database(str(db_path))
+    save_book(
+        db,
+        {
+            "path": f"/library/{title.lower().replace(' ', '-')}.epub",
+            "title": title,
+            "author": author,
+            "series": series,
+            "series_index": 1.0,
+            "publisher": "",
+            "published": "",
+            "isbn": "",
+            "language": "en",
+            "tags": "",
+        },
+    )
+    db.conn.close()
+
+
 def _index_library(runner, tmp_path, make_epub, books):
     """Build a library of EPUBs and index it into a tmp database.
 
@@ -144,6 +172,184 @@ def test_search_results_show_a_path_column(runner, tmp_path, make_epub):
     assert "book0.epub" in result.output
 
 
+@pytest.mark.parametrize("query", ["Ender's", "Well-Tempered"])
+def test_search_accepts_a_title_with_punctuation(runner, tmp_path, make_epub, query):
+    """The reported bug, from the user's side: an ordinary title with an
+    apostrophe or a hyphen is searched for, not rejected as a bad query."""
+    db_path = _index_library(
+        runner,
+        tmp_path,
+        make_epub,
+        [
+            {"title": "Ender's Game", "author": "Orson Scott Card"},
+            {"title": "Well-Tempered Clavier", "author": "Bach"},
+        ],
+    )
+
+    result = runner.invoke(cli, ["search", query, "--database", str(db_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "Invalid search query" not in result.output
+    assert "1 found" in result.output
+
+
+def test_dry_run_search_accepts_a_title_with_punctuation(runner, tmp_path, make_epub):
+    """The dry-run preflight validates the query separately, so it has to agree
+    with the real search about which queries are searchable."""
+    db_path = _index_library(
+        runner, tmp_path, make_epub, [{"title": "Ender's Game", "author": "Orson Scott Card"}]
+    )
+
+    result = runner.invoke(cli, ["--dry-run", "search", "Ender's", "--database", str(db_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "Invalid search query" not in result.output
+    assert "1 found" in result.output
+
+
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        (["Ender's Game"], "1 found"),  # literal, punctuated
+        (["badcol:Dune"], "No results found"),  # literal, operator-shaped
+        (["--fts", "author:Card"], "1 found"),  # expression
+        (["--fts", "badcol:Dune"], "Invalid search query"),  # expression, malformed
+    ],
+)
+def test_dry_run_search_agrees_with_the_real_search_in_both_modes(
+    runner, tmp_path, make_epub, args, expected
+):
+    """The dry-run preflight settles the query separately from the real search,
+    so the flag has to reach both or the two would disagree about which
+    queries are searchable."""
+    db_path = _index_library(
+        runner, tmp_path, make_epub, [{"title": "Ender's Game", "author": "Orson Scott Card"}]
+    )
+    invocation = ["search", *args, "--database", str(db_path)]
+
+    dry = runner.invoke(cli, ["--dry-run", *invocation])
+    real = runner.invoke(cli, invocation)
+
+    assert dry.exit_code == real.exit_code, dry.output
+    assert expected in dry.output
+    assert expected in real.output
+
+
+def test_a_query_starting_with_a_dash_is_searched_for_after_a_separator(
+    runner, tmp_path, make_epub
+):
+    """The leading dash is claimed by option parsing, not by FTS5.
+
+    Click reads `-Dune` as an option before the query reaches the search at
+    all, so the usual `--` separator is what makes it text -- and once it is
+    text, it is searched for literally like any other.
+    """
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Dune", "author": "Herbert"}])
+
+    result = runner.invoke(cli, ["search", "--database", str(db_path), "--", "-Dune"])
+
+    assert result.exit_code == 0, result.output
+    assert "1 found" in result.output
+    assert "Dune" in result.output
+
+
+def test_an_expression_starting_with_a_dash_runs_after_a_separator(runner, tmp_path, make_epub):
+    """`--` is not only for literal text: a column filter is where it bites.
+
+    An FTS5 expression beginning with `-` is claimed by option parsing exactly
+    like any other dashed token, so the documented form has to carry the
+    separator to reach the engine at all.
+    """
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Dune", "author": "Herbert"}])
+    # A second Dune, this one in the series the exclusion names. Written
+    # straight to the store because the EPUB fixture carries no series field,
+    # and the claim under test is FTS5's, not the extractor's.
+    _save_series_book(db_path, title="Dune Chronicles", series="Chronicles")
+
+    result = runner.invoke(
+        cli,
+        ["search", "--fts", "--database", str(db_path), "--", "-series:Chronicles title:Dune"],
+    )
+
+    assert "No such option" not in result.output
+    assert result.exit_code == 0, result.output
+
+    # Both books answer the unfiltered query, so the exclusion below has
+    # something to remove -- without this the NOT could do nothing and still
+    # look right.
+    both = runner.invoke(cli, ["search", "--fts", "title:Dune", "--database", str(db_path)])
+
+    assert "2 found" in both.output, both.output
+
+    # And the exclusion the README documents alongside it does exclude.
+    excluded = runner.invoke(
+        cli, ["search", "--fts", "title:Dune NOT series:Chronicles", "--database", str(db_path)]
+    )
+
+    assert excluded.exit_code == 0, excluded.output
+    assert "1 found" in excluded.output
+    assert "Chronicles" not in excluded.output
+
+
+@pytest.mark.parametrize("query", ["", "   "])
+@pytest.mark.parametrize("dry_run", [False, True], ids=["real", "dry-run"])
+def test_a_query_with_no_words_finds_nothing_in_either_mode(
+    runner, tmp_path, make_epub, query, dry_run
+):
+    """A query holding no words resolves to an empty FTS5 expression, which the
+    engine rejects. That must never surface as database damage: there is
+    nothing to match and nothing malformed about asking, in either mode."""
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Dune", "author": "Herbert"}])
+    prefix = ["--dry-run"] if dry_run else []
+
+    result = runner.invoke(cli, [*prefix, "search", query, "--database", str(db_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "No results found" in result.output
+    assert "Database error" not in result.output
+    assert "Invalid search query" not in result.output
+
+
+def test_search_still_reports_a_mistyped_column_filter_under_fts(runner, tmp_path, make_epub):
+    """Under the flag the user is writing syntax, so a wrong filter is an error
+    rather than a silent empty result reading as "you own no such book"."""
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Dune", "author": "Herbert"}])
+
+    result = runner.invoke(cli, ["search", "--fts", "badcol:Dune", "--database", str(db_path)])
+
+    assert result.exit_code != 0
+    assert "Invalid search query" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_the_same_filter_without_the_flag_is_an_ordinary_search(runner, tmp_path, make_epub):
+    """Typed as text it is text: a search that finds nothing, not an error."""
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Dune", "author": "Herbert"}])
+
+    result = runner.invoke(cli, ["search", "badcol:Dune", "--database", str(db_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "Invalid search query" not in result.output
+    assert "No results found" in result.output
+
+
+@pytest.mark.parametrize("flag", ["--fts", "--raw"])
+def test_expression_syntax_is_available_under_the_flag(runner, tmp_path, make_epub, flag):
+    """Both spellings of the flag reach the engine's own syntax."""
+    db_path = _index_library(
+        runner,
+        tmp_path,
+        make_epub,
+        [{"title": "Dune", "author": "Frank Herbert"}, {"title": "Foundation", "author": "Asimov"}],
+    )
+
+    result = runner.invoke(cli, ["search", flag, "author:Herbert", "--database", str(db_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "1 found" in result.output
+    assert "Dune" in result.output
+
+
 def test_search_does_not_render_a_missing_series_index_as_none(runner, tmp_path, make_epub):
     db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Solo", "author": "One"}])
 
@@ -162,7 +368,7 @@ def test_malformed_query_exits_nonzero_without_a_traceback(runner, tmp_path, mak
         runner, tmp_path, make_epub, [{"title": "Dune", "author": "Frank Herbert"}]
     )
 
-    result = runner.invoke(cli, ["search", bad_query, "--database", str(db_path)])
+    result = runner.invoke(cli, ["search", "--fts", bad_query, "--database", str(db_path)])
 
     assert result.exit_code != 0
     assert "Traceback" not in result.output
@@ -562,8 +768,10 @@ def test_dry_run_search_reports_a_bad_query_before_anything_else(runner, tmp_pat
     conn.commit()
     conn.close()
 
-    dry = runner.invoke(cli, ["--dry-run", "search", 'broken"(', "--database", str(db_path)])
-    real = runner.invoke(cli, ["search", 'broken"(', "--database", str(db_path)])
+    dry = runner.invoke(
+        cli, ["--dry-run", "search", "--fts", 'broken"(', "--database", str(db_path)]
+    )
+    real = runner.invoke(cli, ["search", "--fts", 'broken"(', "--database", str(db_path)])
 
     assert dry.exit_code != 0
     assert "Invalid search query" in dry.output
