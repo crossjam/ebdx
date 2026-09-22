@@ -16,8 +16,8 @@
       when `--database` was given, the default location otherwise; verify `ebdx search
       -dune Foundation` names `-d/--database` and that a default-path run does not
 - [ ] 2.2 Add the `--` explanation to usage errors raised for a command line carrying a
-      token that begins with a single dash; verify `ebdx search -Dune` and `ebdx search
-      -dune` both carry the hint and still exit non-zero
+      token that begins with a dash, one dash or two; verify `ebdx search -Dune`, `ebdx
+      search -dune` and `ebdx search --Dune` all carry the hint and still exit non-zero
 
 ## 3. Tests
 
@@ -26,7 +26,11 @@
 - [ ] 3.3 A refused path reports the accepted suffixes and exits non-zero
 - [ ] 3.4 The not-found message names the option, and names the default location when no
       option was given
-- [ ] 3.5 A dashed argument after `--` is read as text, for `search` and for `index`
+- [ ] 3.5 A dashed argument after `--` is read as text, in both the `-Dune` and `--Dune`
+      shapes, for `search` and for `index`
+- [ ] 3.6 Pin the guard's known limitation: `ebdx index <dir> -database.db` still creates
+      `atabase.db`, because the fragment names a database. Assert the current behaviour so
+      the boundary is recorded rather than assumed
 
 ## 4. Documentation
 

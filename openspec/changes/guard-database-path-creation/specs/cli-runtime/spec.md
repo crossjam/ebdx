@@ -60,19 +60,20 @@ visible as such rather than reading as a missing library.
 
 ### Requirement: Usage errors point at the option separator
 
-An argument beginning with a single dash is read as an option, so text a user meant as a
-value is claimed before the command sees it. When argument parsing rejects a command line
-carrying such a token, the error SHALL explain that text beginning with a dash is separated
-from options with `--`.
+An argument beginning with a dash is read as an option, so text a user meant as a value is
+claimed before the command sees it. This holds for one dash and for two: a short option may
+absorb the rest of the token as its value, and a two-dash token is read as a long option.
+When argument parsing rejects a command line carrying such a token, the error SHALL explain
+that text beginning with a dash is separated from options with `--`.
 
 #### Scenario: A dashed argument is rejected
 
-- **WHEN** a command line containing an argument that begins with a single dash is rejected by
-  argument parsing
+- **WHEN** a command line containing an argument that begins with a dash -- one dash or two,
+  the `--` separator itself excepted -- is rejected by argument parsing
 - **THEN** the error explains that `--` separates text from options, and the exit status is
   non-zero
 
 #### Scenario: A separated argument is read as text
 
-- **WHEN** an argument beginning with a dash is given after `--`
+- **WHEN** an argument beginning with a dash, one dash or two, is given after `--`
 - **THEN** it is used as the command's argument rather than read as an option

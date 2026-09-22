@@ -18,8 +18,9 @@ than at detecting the mistake.
 
 ## Goals / Non-Goals
 
-- **Goals:** a mistyped option never leaves a file behind; a path absorbed from an option is
-  recognisable in the error; a user who meets the dash problem is told about `--`.
+- **Goals:** a mistyped option does not leave a file behind *unless its fragment names a
+  database*; a path absorbed from an option is recognisable in the error; a user who meets
+  the dash problem is told about `--`.
 - **Non-Goals:** inferring that a path *was* absorbed from a glued option; rescuing the
   user's intended command line; changing how an existing database is found, opened, or
   repaired.
@@ -83,9 +84,14 @@ silent query text, which is a worse failure than the one being fixed.
   escape hatch is to create the file before pointing `ebdx` at it. Judged acceptable: the
   cost is one explicit error on an unusual request, against a silent stray file on a common
   typo.
-- **The rule does not catch every glued fragment.** A fragment that happens to end in a
-  database suffix is still created. No fragment of `-d`, `-l` or their long forms produces
-  one, and the residue is a path the user typed something very like on purpose.
+- **The rule does not catch every glued fragment.** A fragment that itself ends in a database
+  suffix is still created, and one of those is a real typo rather than a benign one:
+  `ebdx index ./lib -database.db` glues to `-d atabase.db` and creates `atabase.db`, which
+  the suffix rule has no reason to refuse. (`-dbackup.db` creates `backup.db`, but that is
+  the ordinary glued spelling of `-d backup.db` and the file is what was asked for.) The
+  guard is therefore a floor, not a guarantee: it catches every fragment that does not name
+  a database, which is the common case, and the message naming the option is what covers
+  the rest.
 - **`ebdx index ~/books -d mylibrary` changes behaviour for anyone relying on it.** → Named
   as BREAKING in the proposal; pre-1.0, no packaged release, and the message says exactly
   what to type instead.
