@@ -102,11 +102,18 @@ The second phase is genuinely proportional work on a large library, and giving `
 the same two-phase shape as `index` means the two commands look alike while they work.
 
 **`show_progress` is a parameter, not a global.** `scan_and_index` and `plan_index` take
-`show_progress: bool = True`, and the CLI passes `not quiet`. The group callback carries
+`show_progress: bool = False`, and the CLI passes `not quiet`. The group callback carries
 `quiet` on `ctx.obj` beside `dry_run`, for the reason recorded when `--dry-run` landed: a
-module global makes the `CliRunner` tests order-dependent. The default is on rather than
-off so a library caller gets the display in a terminal without opting in, while the
-terminal check keeps it silent everywhere else.
+module global makes the `CliRunner` tests order-dependent.
+
+The default is off, and the reason is the log sink. What keeps a warning from tearing
+through a live bar is not anything in the scanner: it is `progress.log_sink` installed as
+loguru's sink, so records and frames share one console. The CLI does that at startup and
+then passes its own choice down explicitly. A caller embedding the scanner has loguru
+writing to its own stderr handler until it does the same, so a display enabled by default
+would be corrupted by the first extraction warning -- the exact failure the shared console
+exists to prevent. Defaulting off means a display is only ever enabled by a caller that has
+also arranged the coordination it depends on.
 
 ## Risks / Trade-offs
 

@@ -48,7 +48,8 @@ display adds no new package.
 
 - `src/ebdx/progress.py` (new): the shared stderr console and the two display helpers.
 - `src/ebdx/scanner.py`: `scan_and_index` and `plan_index` wrap the walk and the extraction
-  loop; both grow a `show_progress` switch defaulting to on.
+  loop; both grow a `show_progress` switch defaulting to off, so a display is only enabled
+  by a caller that has also installed the shared log sink.
 - `src/ebdx/cli.py`: the log sink writes through the shared console; the group callback
   carries `quiet` on `ctx.obj` beside `dry_run`; `index` and `discover` pass it down.
 - `tests/test_cli.py`, `tests/test_scanner.py`: coverage for suppression, non-terminal
