@@ -108,15 +108,36 @@ def _label_column() -> TextColumn:
     )
 
 
+def _stream_is_a_terminal(console: Console) -> bool:
+    """Report whether the console's destination is genuinely a terminal.
+
+    Rich's ``Console.is_terminal`` is not the same question: ``FORCE_COLOR`` in
+    the environment makes it answer true for a stream that is a redirected file,
+    and a live display started on that answer writes frames and cursor-control
+    sequences into the file. The guarantee this module makes is about the
+    destination, so the destination is what gets asked.
+
+    A console built with ``stderr=True`` resolves its file at access time, and a
+    stream can be missing its ``isatty`` or already closed; any of those is
+    treated as "not a terminal", which is the safe direction to be wrong in.
+    """
+    try:
+        isatty = getattr(console.file, "isatty", None)
+        return bool(isatty and isatty())
+    except (ValueError, OSError):
+        # ValueError: I/O operation on closed file. OSError: detached stream.
+        return False
+
+
 @contextmanager
 def _display(*columns: ProgressColumn, enabled: bool) -> Iterator[Progress]:
     """Start a transient display, or a disabled one that renders nothing.
 
-    The two suppression rules -- ``--quiet`` asked for silence, and the stream
-    is not a terminal -- are both applied here so no caller can implement only
-    one of them. A disabled ``Progress`` never starts its live display and
-    prints nothing at all, not even the single final frame Rich would otherwise
-    emit to a non-terminal when the display stops.
+    The two suppression rules -- ``--quiet`` asked for silence, and the
+    destination stream is not a terminal -- are both applied here so no caller
+    can implement only one of them. A disabled ``Progress`` never starts its
+    live display and prints nothing at all, not even the single final frame
+    Rich would otherwise emit to a non-terminal when the display stops.
 
     The display is transient: once the work is done the command's own summary
     is the record, and a finished bar left above it is only something for that
@@ -127,7 +148,7 @@ def _display(*columns: ProgressColumn, enabled: bool) -> Iterator[Progress]:
         *columns,
         console=console,
         transient=True,
-        disable=not enabled or not console.is_terminal,
+        disable=not enabled or not _stream_is_a_terminal(console),
     )
     with progress:
         yield progress
