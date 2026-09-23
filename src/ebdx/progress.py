@@ -178,7 +178,10 @@ def walk_progress(
         TimeElapsedColumn(),
         enabled=enabled,
     ) as progress:
-        task = progress.add_task(description, total=None, label="")
+        # Seeded rather than left blank: a walk that has found nothing yet --
+        # including one crossing a large tree holding no EPUBs at all -- still
+        # has a count to report, and "0 found" is that count.
+        task = progress.add_task(description, total=None, label="0 found")
 
         def walked() -> Iterator[Path]:
             for found, path in enumerate(paths, start=1):
