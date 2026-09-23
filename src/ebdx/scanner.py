@@ -57,7 +57,7 @@ def scan_and_index(
     db: sqlite_utils.Database,
     console: Console | None = None,
     *,
-    show_progress: bool = True,
+    show_progress: bool = False,
 ) -> dict:
     """Scan a directory for EPUBs, extract metadata, and index into the database.
 
@@ -65,10 +65,17 @@ def scan_and_index(
         root: The root directory to scan for .epub files.
         db: The database connection.
         console: Optional Rich console for result output.
-        show_progress: Whether a live display was asked for. It renders on the
-            shared diagnostic console -- the one log records go through, so a
-            warning does not tear through it -- and only when that console is a
-            terminal, so leaving this on costs a redirected run nothing.
+        show_progress: Whether to show a live display. Off by default, and
+            opt-in rather than opt-out on purpose: the display shares a console
+            with log records so a warning cannot tear through the bar, but that
+            sharing only holds once something has installed
+            :func:`ebdx.progress.log_sink` as loguru's sink. The CLI does that
+            at startup and then passes its own choice here explicitly; a caller
+            embedding the scanner has loguru writing to its own stderr handler
+            until it does the same, and a display enabled by default would be
+            corrupted by the first warning. It renders only when the diagnostic
+            stream is a terminal, so turning it on costs a redirected run
+            nothing.
 
     Returns:
         A dictionary with per-run counts: ``total`` files found, ``indexed``
@@ -134,7 +141,7 @@ def plan_index(
     db: sqlite_utils.Database | None,
     console: Console | None = None,
     *,
-    show_progress: bool = True,
+    show_progress: bool = False,
 ) -> dict:
     """Report what :func:`scan_and_index` would do, without writing anything.
 

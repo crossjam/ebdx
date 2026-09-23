@@ -21,7 +21,8 @@
 ## 3. Call sites
 
 - [x] 3.1 Wrap the walk and the extraction loop in `scan_and_index` with a `show_progress`
-      switch defaulting to on; verify the returned counts are unchanged.
+      switch defaulting to off, so a display is only ever enabled by a caller that has
+      also installed the shared log sink; verify the returned counts are unchanged.
 - [x] 3.2 Do the same in `plan_index`, so a dry run shows the display under its existing
       label; verify the dry-run summary and label are untouched.
 - [x] 3.3 Wrap `discover`'s walk and its table-building loop; verify the listed files and

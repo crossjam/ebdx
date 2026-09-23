@@ -354,7 +354,9 @@ def test_indexing_shows_both_phases_of_progress(tmp_path, make_epub, diagnostic_
         make_epub(f"library/book{i}.epub", title=f"Book {i}", author="AA")
 
     results, console = _result_console()
-    stats = scan_and_index(library, get_database(str(tmp_path / "ebdx.db")), console)
+    stats = scan_and_index(
+        library, get_database(str(tmp_path / "ebdx.db")), console, show_progress=True
+    )
 
     shown = diagnostic_terminal.getvalue()
     assert stats["indexed"] == 3
@@ -374,7 +376,12 @@ def test_a_bracketed_filename_is_shown_verbatim(tmp_path, make_epub, diagnostic_
     make_epub("library/x[dim]y.epub", title="Dim", author="A")
 
     _, console = _result_console()
-    scan_and_index(tmp_path / "library", get_database(str(tmp_path / "ebdx.db")), console)
+    scan_and_index(
+        tmp_path / "library",
+        get_database(str(tmp_path / "ebdx.db")),
+        console,
+        show_progress=True,
+    )
 
     assert "x[dim]y.epub" in diagnostic_terminal.getvalue()
 
@@ -384,7 +391,7 @@ def test_the_display_names_the_file_in_hand(tmp_path, make_epub, diagnostic_term
     make_epub("library/dune.epub", title="Dune", author="FH")
 
     _, console = _result_console()
-    scan_and_index(library, get_database(str(tmp_path / "ebdx.db")), console)
+    scan_and_index(library, get_database(str(tmp_path / "ebdx.db")), console, show_progress=True)
 
     assert "dune.epub" in diagnostic_terminal.getvalue()
 
@@ -434,7 +441,10 @@ def test_a_warning_mid_display_stays_readable(
     handler_id = logger.add(log_sink, level="WARNING", colorize=True)
     try:
         stats = scan_and_index(
-            library, get_database(str(tmp_path / "ebdx.db")), _result_console()[1]
+            library,
+            get_database(str(tmp_path / "ebdx.db")),
+            _result_console()[1],
+            show_progress=True,
         )
     finally:
         logger.remove(handler_id)
@@ -452,3 +462,71 @@ def test_a_warning_mid_display_stays_readable(
 
     # And the display carried on below it.
     assert "4/4" in shown.split(records[-1])[-1]
+
+
+def test_force_color_does_not_start_a_display_on_a_redirected_stream(
+    tmp_path, make_epub, monkeypatch
+):
+    """``FORCE_COLOR`` makes Rich call a redirected stream a terminal.
+
+    The guarantee is about the destination, not about Rich's colour policy, so
+    the display has to stay silent here: a frame written now lands in whatever
+    file stderr was pointed at.
+    """
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    buf = io.StringIO()
+    monkeypatch.setattr(progress, "_CONSOLE", Console(file=buf, width=100))
+
+    # Rich agrees this "is" a terminal -- that is the trap being guarded.
+    assert progress.diagnostic_console().is_terminal is True
+
+    stats = scan_and_index(
+        library,
+        get_database(str(tmp_path / "ebdx.db")),
+        _result_console()[1],
+        show_progress=True,
+    )
+
+    assert stats["indexed"] == 1
+    assert buf.getvalue() == ""
+
+
+def test_a_walk_that_has_found_nothing_still_reports_a_count(tmp_path, diagnostic_terminal):
+    """A tree holding no EPUBs must still show ``0 found`` rather than a blank."""
+    library = tmp_path / "library"
+    (library / "sub").mkdir(parents=True)
+    (library / "sub" / "notes.txt").write_text("no books here")
+
+    stats = scan_and_index(
+        library, get_database(str(tmp_path / "ebdx.db")), _result_console()[1], show_progress=True
+    )
+
+    assert stats["indexed"] == 0
+    assert "0 found" in diagnostic_terminal.getvalue()
+
+
+def test_progress_is_opt_in_for_direct_callers(tmp_path, make_epub, diagnostic_terminal):
+    """A caller that has not installed the shared log sink gets no display.
+
+    Default-on would mean loguru's own stderr handler writing through a live
+    bar, which is the corruption the shared console exists to prevent.
+    """
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+
+    stats = scan_and_index(library, get_database(str(tmp_path / "ebdx.db")), _result_console()[1])
+
+    assert stats["indexed"] == 1
+    assert diagnostic_terminal.getvalue() == ""
+
+
+def test_plan_index_progress_is_opt_in_too(tmp_path, make_epub, diagnostic_terminal):
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+
+    stats = plan_index(library, None, _result_console()[1])
+
+    assert stats["indexed"] == 1
+    assert diagnostic_terminal.getvalue() == ""
