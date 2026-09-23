@@ -1061,3 +1061,35 @@ def test_a_failure_stays_counted_and_readable_under_the_display(
     assert not any("━" in frame for frame in records)
     failed_row = next(line for line in result.stdout.splitlines() if "Failed" in line)
     assert "1" in failed_row
+
+
+def test_discover_lists_a_bracketed_filename_verbatim(runner, tmp_path, make_epub):
+    """Square brackets in a real filename are not markup.
+
+    Rich parses them as tags when a cell is handed over as a string, so
+    ``x[dim]y.epub`` would be listed as ``xy.epub`` -- a name that is not the
+    name on disk, in the output a user would copy a path out of.
+    """
+    make_epub("lib/x[dim]y.epub", title="Dim")
+
+    result = runner.invoke(cli, ["discover", str(tmp_path / "lib")])
+
+    assert result.exit_code == 0, result.output
+    assert "x[dim]y.epub" in result.output
+
+
+def test_discover_lists_a_bracketed_parent_directory_verbatim(
+    runner, tmp_path, make_epub, monkeypatch
+):
+    """The path column is as exposed to markup as the filename column.
+
+    The terminal is widened for this one: the path column ellipsizes a long
+    ``tmp_path``, and a truncated cell would hide the very thing under test.
+    """
+    make_epub("lib/[series]/one.epub", title="One")
+    monkeypatch.setenv("COLUMNS", "300")
+
+    result = runner.invoke(cli, ["discover", str(tmp_path / "lib")])
+
+    assert result.exit_code == 0, result.output
+    assert "[series]" in result.output

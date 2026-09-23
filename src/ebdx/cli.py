@@ -342,6 +342,7 @@ def discover(ctx: click.Context, paths: tuple[Path, ...]):
         return
 
     from rich.table import Table
+    from rich.text import Text
 
     table = Table(title=f"Discovered {len(epub_files)} EPUB file(s)")
     table.add_column("Filename", style="cyan")
@@ -352,7 +353,10 @@ def discover(ctx: click.Context, paths: tuple[Path, ...]):
     # half of the display is a real position rather than a pulse.
     with file_progress(epub_files, "Listing files", enabled=show_progress) as tracked:
         for epub in tracked:
-            table.add_row(epub.name, str(epub.parent))
+            # Wrapped as Text, not passed as strings: a real filename may
+            # contain square brackets, and Rich would read those as markup
+            # and drop them from the listing.
+            table.add_row(Text(epub.name), Text(str(epub.parent)))
 
     console.print(table)
 
