@@ -33,7 +33,7 @@ def _write_epub(
     author: str,
     publisher: str,
     language: str,
-    subjects: Sequence[str],
+    subjects: Sequence[str | None],
 ) -> Path:
     """Build a small valid EPUB at ``path`` and return it."""
     book = epub.EpubBook()
@@ -70,6 +70,8 @@ def make_epub(tmp_path: Path) -> EpubFactory:
     A bare name lands directly in ``tmp_path``; a relative path containing
     directories is created beneath it, so a test can build a nested library.
     Every metadata argument has a default, so ``make_epub()`` alone is valid.
+    A ``None`` in ``subjects`` writes an empty ``<dc:subject/>``, which is
+    what a real book with a blank subject element looks like.
     """
 
     def factory(
@@ -79,7 +81,7 @@ def make_epub(tmp_path: Path) -> EpubFactory:
         author: str = "",
         publisher: str = "",
         language: str = "en",
-        subjects: Sequence[str] = (),
+        subjects: Sequence[str | None] = (),
     ) -> Path:
         return _write_epub(
             tmp_path / name,
