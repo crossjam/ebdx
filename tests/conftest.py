@@ -5,11 +5,17 @@ caller-supplied metadata; ``make_corrupt_epub`` writes a file with an ``.epub``
 suffix that is not a valid EPUB. Fixtures are generated rather than committed so
 each test can state the exact metadata it depends on and no book binaries live
 in the repo.
+
+``diagnostic_terminal`` and ``terminal_frames`` are for the progress display,
+which renders only on a terminal and so is invisible to a test until one is
+faked.
 """
 
 from __future__ import annotations
 
 import html
+import io
+import re
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -101,3 +107,58 @@ def make_corrupt_epub(tmp_path: Path) -> CorruptFactory:
         return path
 
     return factory
+
+
+class TerminalStringIO(io.StringIO):
+    """An in-memory stream that reports itself as a terminal.
+
+    The progress display decides whether to render by asking its destination
+    ``isatty()``, so a capture buffer has to answer that question the way a
+    terminal would for a test to see any frames at all.
+    """
+
+    def isatty(self) -> bool:
+        return True
+
+
+@pytest.fixture
+def diagnostic_terminal(monkeypatch) -> io.StringIO:
+    """Point ebdx's shared diagnostic console at a captured, forced-terminal stream.
+
+    Two things resolve their output through ``ebdx.progress``: the progress
+    display, which renders only when that console is a terminal, and the log
+    sink. Redirecting the one console is therefore what lets a test both see a
+    display at all and watch how a log record and a live display behave when
+    they land in the same place.
+
+    Colour is off so assertions read against plain text; the cursor and
+    erase-line sequences a live display emits are left in, since they are part
+    of what is being checked.
+
+    The buffer answers ``isatty()`` truthfully-for-a-terminal because that is
+    the question the display now asks. ``force_terminal`` alone would tell Rich
+    to render but would leave the suppression check seeing a plain file, so the
+    fixture would capture nothing.
+    """
+    from rich.console import Console
+
+    from ebdx import progress
+
+    buf = TerminalStringIO()
+    monkeypatch.setattr(
+        progress,
+        "_CONSOLE",
+        Console(file=buf, force_terminal=True, width=100, color_system=None, emoji=False),
+    )
+    return buf
+
+
+def terminal_frames(captured: str) -> list[str]:
+    """Split captured terminal output into the lines a screen would have shown.
+
+    A live display overwrites its line with a carriage return rather than a
+    newline, so splitting on both is what separates one rendered frame -- or
+    one log record -- from the next. Escape sequences are dropped.
+    """
+    plain = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", captured)
+    return [frame for frame in re.split(r"[\r\n]+", plain) if frame.strip()]
