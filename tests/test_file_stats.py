@@ -1,115 +1,85 @@
 """Tests for file statistics utilities."""
 
 import hashlib
-import tempfile
-from datetime import datetime
-from pathlib import Path
+from datetime import UTC, datetime
 
+from ebdx.utils import file_stats
 from ebdx.utils.file_stats import FileStats, get_file_stats
 
 
-def test_get_file_stats_with_valid_file():
-    """Test get_file_stats with a valid file."""
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        tmp.write(b"Hello, World!")
-        tmp_path = Path(tmp.name)
+def test_get_file_stats_for_regular_file(tmp_path):
+    """Report the size, UTC modification time, and digest of a regular file."""
+    contents = b"Hello, World!"
+    file_path = tmp_path / "book.epub"
+    file_path.write_bytes(contents)
 
-    try:
-        stats = get_file_stats(tmp_path)
+    stats = get_file_stats(file_path)
 
-        # Check that we got a FileStats object
-        assert isinstance(stats, FileStats)
-
-        # Check size
-        assert stats.size == 13
-
-        # Check mtime is a valid ISO-8601 UTC timestamp
-        assert stats.mtime is not None
-        assert stats.mtime.endswith("Z")
-        # Parse to verify it's a valid timestamp
-        datetime.fromisoformat(stats.mtime.replace("Z", "+00:00"))
-
-        # Check content hash
-        assert stats.content_hash == hashlib.sha256(b"Hello, World!").hexdigest()
-
-    finally:
-        tmp_path.unlink()
+    assert stats == FileStats(
+        size=len(contents),
+        mtime=datetime.fromtimestamp(file_path.stat().st_mtime, tz=UTC)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        content_hash=hashlib.sha256(contents).hexdigest(),
+    )
 
 
-def test_get_file_stats_with_empty_file():
-    """Test get_file_stats with an empty file."""
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        tmp_path = Path(tmp.name)
+def test_get_file_stats_for_empty_file(tmp_path):
+    """An empty file has zero size and the SHA-256 digest of empty bytes."""
+    file_path = tmp_path / "empty.epub"
+    file_path.touch()
 
-    try:
-        stats = get_file_stats(tmp_path)
+    stats = get_file_stats(file_path)
 
-        # Check that we got a FileStats object
-        assert isinstance(stats, FileStats)
-
-        # Check size
-        assert stats.size == 0
-
-        # Check mtime is a valid ISO-8601 UTC timestamp
-        assert stats.mtime is not None
-        assert stats.mtime.endswith("Z")
-
-        # Check content hash for empty file
-        assert stats.content_hash == hashlib.sha256(b"").hexdigest()
-
-    finally:
-        tmp_path.unlink()
+    assert stats.size == 0
+    assert stats.mtime is not None
+    assert stats.content_hash == hashlib.sha256(b"").hexdigest()
 
 
-def test_get_file_stats_with_nonexistent_file():
-    """Test get_file_stats with a nonexistent file."""
-    nonexistent_path = Path("/nonexistent/file")
-    stats = get_file_stats(nonexistent_path)
+def test_get_file_stats_for_missing_file(tmp_path):
+    """A missing file degrades gracefully when neither operation can run."""
+    stats = get_file_stats(tmp_path / "missing.epub")
 
-    # Should return FileStats with all None values
-    assert isinstance(stats, FileStats)
-    assert stats.size is None
-    assert stats.mtime is None
-    assert stats.content_hash is None
+    assert stats == FileStats(size=None, mtime=None, content_hash=None)
 
 
-def test_get_file_stats_with_unreadable_file(monkeypatch):
-    """Test get_file_stats with a file that can't be read."""
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        tmp.write(b"test content")
-        tmp_path = Path(tmp.name)
+def test_get_file_stats_hashes_when_stat_fails(tmp_path, monkeypatch):
+    """A stat failure does not prevent hashing the file contents."""
+    contents = b"still hashable"
+    file_path = tmp_path / "book.epub"
+    file_path.write_bytes(contents)
 
-    try:
-        # Make file unreadable
-        tmp_path.chmod(0o000)
+    def fail_stat(_path):
+        raise OSError("stat failed")
 
-        stats = get_file_stats(tmp_path)
+    monkeypatch.setattr(type(file_path), "stat", fail_stat)
 
-        # Should still get size and mtime, but not content hash
-        assert isinstance(stats, FileStats)
-        assert stats.size == 12
-        assert stats.mtime is not None
-        assert stats.content_hash is None
+    stats = get_file_stats(file_path)
 
-    finally:
-        # Restore permissions so we can delete
-        tmp_path.chmod(0o644)
-        tmp_path.unlink()
+    assert stats == FileStats(
+        size=None,
+        mtime=None,
+        content_hash=hashlib.sha256(contents).hexdigest(),
+    )
 
 
-def test_compute_sha256_large_file():
-    """Test SHA-256 computation with a larger file."""
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        # Write a larger amount of data
-        data = b"A" * 100000  # 100KB of A's
-        tmp.write(data)
-        tmp_path = Path(tmp.name)
+def test_get_file_stats_preserves_stat_fields_when_hashing_fails(tmp_path, monkeypatch):
+    """A hash failure does not discard independently available stat fields."""
+    contents = b"readable metadata"
+    file_path = tmp_path / "book.epub"
+    file_path.write_bytes(contents)
+    expected_mtime = datetime.fromtimestamp(file_path.stat().st_mtime, tz=UTC)
+    expected_mtime = expected_mtime.isoformat().replace("+00:00", "Z")
 
-    try:
-        stats = get_file_stats(tmp_path)
+    def fail_hash(_path):
+        raise OSError("hash failed")
 
-        # Check content hash
-        assert stats.content_hash == hashlib.sha256(data).hexdigest()
+    monkeypatch.setattr(file_stats, "_compute_sha256", fail_hash)
 
-    finally:
-        tmp_path.unlink()
+    stats = get_file_stats(file_path)
+
+    assert stats == FileStats(
+        size=len(contents),
+        mtime=expected_mtime,
+        content_hash=None,
+    )
