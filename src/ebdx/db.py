@@ -953,50 +953,21 @@ def search_books(
 
 # File-statistics migration.
 def _apply_file_stats_migration(db: "Database") -> None:
-    """Add file statistics while retaining indexed_at's timestamp contract.
+    """Add nullable file-fact columns to existing book records.
 
-    SQLite permits only constant defaults in ``ALTER TABLE ... ADD COLUMN``;
-    attempting to add ``DEFAULT CURRENT_TIMESTAMP`` aborts the entire upgrade.
-    Rebuilding the managed table lets existing rows receive an explicit
-    timestamp and gives both upgraded and fresh databases the same constraint.
+    No column carries a default: the scanner writes ``indexed_at`` explicitly
+    on each successful index write, so rows indexed before this version keep
+    ``NULL`` facts and an unknown indexing time until they are next indexed.
+    The FTS triggers read none of these columns, so the search index is
+    unaffected.
     """
-    _drop_fts(db)
-    db.execute(
-        """
-        CREATE TABLE books_replacement (
-            id INTEGER PRIMARY KEY,
-            path TEXT NOT NULL,
-            title TEXT NOT NULL,
-            author_id INTEGER REFERENCES authors(id),
-            series TEXT,
-            series_index REAL,
-            publisher TEXT,
-            published TEXT,
-            isbn TEXT,
-            language TEXT,
-            tags TEXT,
-            file_size INTEGER,
-            file_mtime TEXT,
-            content_hash TEXT,
-            indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    db.execute(
-        """
-        INSERT INTO books_replacement (
-            id, path, title, author_id, series, series_index, publisher,
-            published, isbn, language, tags, indexed_at
-        )
-        SELECT
-            id, path, title, author_id, series, series_index, publisher,
-            published, isbn, language, tags, CURRENT_TIMESTAMP
-        FROM books
-        """
-    )
-    db.execute("DROP TABLE books")
-    db.execute("ALTER TABLE books_replacement RENAME TO books")
-    db.execute("CREATE UNIQUE INDEX idx_books_path ON books(path)")
+    for column, column_type in (
+        ("file_size", "INTEGER"),
+        ("file_mtime", "TEXT"),
+        ("content_hash", "TEXT"),
+        ("indexed_at", "TEXT"),
+    ):
+        db.execute(f"ALTER TABLE books ADD COLUMN {column} {column_type}")
 
 
 def _ensure_file_stats_schema(db: "Database") -> None:
@@ -1007,11 +978,7 @@ _FILE_STATS_COLUMNS = {
     "file_size": AddedColumn(column_type=int),
     "file_mtime": AddedColumn(column_type=str),
     "content_hash": AddedColumn(column_type=str),
-    # sqlite-utils treats values ending in ')' as SQL expressions. Keep the
-    # parentheses so fresh schemas get SQLite's timestamp, rather than a
-    # quoted string literal, while the rebuild migration below remains usable
-    # for existing databases.
-    "indexed_at": AddedColumn(column_type=str, not_null=True, default="(CURRENT_TIMESTAMP)"),
+    "indexed_at": AddedColumn(column_type=str),
 }
 
 _FILE_STATS_MIGRATION = Migration(
@@ -1020,7 +987,6 @@ _FILE_STATS_MIGRATION = Migration(
     apply=_apply_file_stats_migration,
     adds={"books": _FILE_STATS_COLUMNS},
     ensure_schema=_ensure_file_stats_schema,
-    rebuilds_search=True,
 )
 
 _MIGRATIONS = (_FILE_STATS_MIGRATION,)

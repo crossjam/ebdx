@@ -108,10 +108,10 @@ def scan_and_index(
 
     Returns:
         A dictionary with per-run counts: ``total`` files found, ``indexed``
-        newly added, ``updated`` already present and refreshed, and
-        ``failed`` skipped because they could not be read. Unchanged files do
-        not need metadata extraction or a database write, so they are not
-        counted as updates.
+        newly added, ``updated`` already present and refreshed, ``skipped``
+        unchanged since their facts were saved, and ``failed`` not indexed
+        because they could not be read, changed while being read, or could
+        not be stored.
     """
     from ebdx.db import save_book
     from ebdx.extractor import extract_metadata
@@ -123,7 +123,7 @@ def scan_and_index(
     epub_files = _find_epub_files(root, show_progress=show_progress)
     console.print(f"[cyan]Found {len(epub_files)} EPUB file(s)[/cyan]")
 
-    stats = {"total": len(epub_files), "indexed": 0, "updated": 0, "failed": 0}
+    stats = {"total": len(epub_files), "indexed": 0, "updated": 0, "skipped": 0, "failed": 0}
 
     if not epub_files:
         return stats
@@ -141,6 +141,7 @@ def scan_and_index(
             resolved = str(epub_path.resolve())
             file_stats = get_file_stats(epub_path)
             if _facts_match(saved_facts.get(resolved), file_stats):
+                stats["skipped"] += 1
                 continue
 
             # Reading a file and storing it fail for different reasons and
@@ -239,7 +240,7 @@ def plan_index(
     epub_files = _find_epub_files(root, show_progress=show_progress)
     console.print(f"[cyan]Found {len(epub_files)} EPUB file(s)[/cyan]")
 
-    stats = {"total": len(epub_files), "indexed": 0, "updated": 0, "failed": 0}
+    stats = {"total": len(epub_files), "indexed": 0, "updated": 0, "skipped": 0, "failed": 0}
 
     if not epub_files:
         return stats
@@ -265,11 +266,17 @@ def plan_index(
                 resolved = str(epub_path.resolve())
                 file_stats = get_file_stats(epub_path)
                 if _facts_match(saved_facts.get(resolved), file_stats):
+                    stats["skipped"] += 1
                     continue
 
                 metadata = extract_metadata(epub_path)
                 if metadata is None:
                     logger.warning(f"No metadata found for {epub_path}")
+                    stats["failed"] += 1
+                    continue
+                # The real run defers a file that changed during extraction.
+                if get_file_stats(epub_path) != file_stats:
+                    logger.warning(f"File changed while reading {epub_path}; would defer indexing")
                     stats["failed"] += 1
                     continue
                 # save_book resolves before keying, so classify against the same form.

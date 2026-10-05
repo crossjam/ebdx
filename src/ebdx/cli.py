@@ -246,6 +246,7 @@ def _dry_run_index(
                 ("Total found", str(stats["total"])),
                 ("Would index", str(stats["indexed"])),
                 ("Would update", str(stats["updated"])),
+                ("Would skip", str(stats["skipped"])),
                 ("Would fail", str(stats["failed"])),
             ],
         )
@@ -415,6 +416,7 @@ def index(ctx: click.Context, root: Path, database):
     summary.add_row("Total found", str(stats["total"]))
     summary.add_row("Newly indexed", str(stats["indexed"]))
     summary.add_row("Updated", str(stats.get("updated", 0)))
+    summary.add_row("Skipped", str(stats.get("skipped", 0)))
     summary.add_row("Failed", str(stats["failed"]))
     console.print(summary)
 

@@ -105,14 +105,17 @@ def test_get_database_stamps_schema_version(tmp_path):
     assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
 
 
-def test_fresh_database_assigns_timestamp_to_indexed_at(tmp_path):
+def test_fresh_database_leaves_indexed_at_to_the_writer(tmp_path):
     db = get_database(str(tmp_path / "ebdx.db"))
 
-    saved = save_book(db, _book())
-    indexed_at = db["books"].get(saved.id)["indexed_at"]
+    indexed_at = _column_schema(db, "books", "indexed_at")
+    assert (indexed_at[2], indexed_at[3], indexed_at[4]) == ("TEXT", 0, None)
 
-    assert indexed_at != "CURRENT_TIMESTAMP"
-    assert db.execute("SELECT datetime(?) IS NOT NULL", [indexed_at]).fetchone()[0] == 1
+    unstamped = save_book(db, _book(path="/library/a.epub"))
+    stamped = save_book(db, _book(path="/library/b.epub", indexed_at="2026-10-05T12:00:00Z"))
+
+    assert db["books"].get(unstamped.id)["indexed_at"] is None
+    assert db["books"].get(stamped.id)["indexed_at"] == "2026-10-05T12:00:00Z"
 
 
 def test_books_path_has_unique_index(tmp_path):
@@ -1025,10 +1028,15 @@ def test_file_stats_migration_opens_an_existing_version_1_database(tmp_path):
     assert migrated.execute("PRAGMA user_version").fetchone()[0] == 2
     row = migrated["books"].get(saved.id)
     assert row["title"] == "Dune"
-    assert {"file_size", "file_mtime", "content_hash", "indexed_at"} <= set(row)
+    # Facts and indexing time for a legacy row are unknown until it is re-indexed.
+    assert {column: row[column] for column in ("file_size", "file_mtime", "content_hash")} == {
+        "file_size": None,
+        "file_mtime": None,
+        "content_hash": None,
+    }
+    assert row["indexed_at"] is None
     indexed_at = _column_schema(migrated, "books", "indexed_at")
-    assert (indexed_at[2], indexed_at[3], indexed_at[4]) == ("TEXT", 1, "CURRENT_TIMESTAMP")
-    assert row["indexed_at"] is not None
+    assert (indexed_at[2], indexed_at[3], indexed_at[4]) == ("TEXT", 0, None)
     assert [hit["title"] for hit in search_books(migrated, "Dune")] == ["Dune"]
 
 

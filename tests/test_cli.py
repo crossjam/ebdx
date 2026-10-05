@@ -576,9 +576,10 @@ def test_dry_run_index_counts_match_a_real_run(runner, tmp_path, make_epub):
         return [next(r for r in rows if label in r).split("│")[2].strip() for label in labels]
 
     assert dry.exit_code == 0 and real.exit_code == 0
-    assert counts(dry.output, ["Total found", "Would index", "Would update"]) == counts(
-        real.output, ["Total found", "Newly indexed", "Updated"]
+    assert counts(dry.output, ["Total found", "Would index", "Would update", "Would skip"]) == (
+        counts(real.output, ["Total found", "Newly indexed", "Updated", "Skipped"])
     )
+    assert counts(real.output, ["Skipped"]) == ["1"]
 
 
 @pytest.mark.parametrize("replace", [False, True], ids=["dropped", "replaced"])

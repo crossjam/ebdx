@@ -72,6 +72,7 @@ def test_empty_directory_reports_zero(tmp_path):
         "total": 0,
         "indexed": 0,
         "updated": 0,
+        "skipped": 0,
         "failed": 0,
     }
 
@@ -92,12 +93,7 @@ def test_second_run_skips_files_with_matching_complete_facts(tmp_path, make_epub
 
     monkeypatch.setattr(extractor, "extract_metadata", extraction_should_not_run)
     second = scan_and_index(library, db)
-    assert (second["total"], second["indexed"], second["updated"], second["failed"]) == (
-        2,
-        0,
-        0,
-        0,
-    )
+    assert second == {"total": 2, "indexed": 0, "updated": 0, "skipped": 2, "failed": 0}
     assert db["books"].count == 2
 
 
@@ -126,7 +122,7 @@ def test_incomplete_saved_facts_force_a_refresh(tmp_path, make_epub):
 
     stats = scan_and_index(library, db)
 
-    assert stats == {"total": 1, "indexed": 0, "updated": 1, "failed": 0}
+    assert stats == {"total": 1, "indexed": 0, "updated": 1, "skipped": 0, "failed": 0}
     assert db["books"].get(row["id"])["content_hash"] is not None
 
 
@@ -172,6 +168,7 @@ def test_file_changed_during_extraction_is_deferred_until_it_is_stable(
         "total": 1,
         "indexed": 0,
         "updated": 0,
+        "skipped": 0,
         "failed": 1,
     }
     assert db["books"].count == 0
@@ -180,10 +177,39 @@ def test_file_changed_during_extraction_is_deferred_until_it_is_stable(
         "total": 1,
         "indexed": 1,
         "updated": 0,
+        "skipped": 0,
         "failed": 0,
     }
     assert next(db["books"].rows)["title"] == "After"
     assert epub_path.exists()
+
+
+def test_plan_index_predicts_deferral_of_a_file_changed_during_extraction(
+    tmp_path, make_epub, monkeypatch
+):
+    """A dry run agrees with the real run about a file that changes mid-read."""
+    library = tmp_path / "library"
+    make_epub("library/book.epub", title="Before", author="AA")
+    db = get_database(str(tmp_path / "ebdx.db"))
+
+    import ebdx.extractor as extractor
+
+    original_extract_metadata = extractor.extract_metadata
+
+    def extract_then_replace(path):
+        metadata = original_extract_metadata(path)
+        make_epub("library/book.epub", title="After", author="AA")
+        return metadata
+
+    monkeypatch.setattr(extractor, "extract_metadata", extract_then_replace)
+
+    assert plan_index(library, db) == {
+        "total": 1,
+        "indexed": 0,
+        "updated": 0,
+        "skipped": 0,
+        "failed": 1,
+    }
 
 
 def test_one_bad_file_does_not_stop_the_run(tmp_path, make_epub, make_corrupt_epub):
@@ -257,7 +283,7 @@ def test_plan_index_handles_a_pre_path_database(tmp_path, make_epub):
 
     stats = plan_index(library, get_database(str(db_path), read_only=True))
 
-    assert stats == {"total": 2, "indexed": 2, "updated": 0, "failed": 0}
+    assert stats == {"total": 2, "indexed": 2, "updated": 0, "skipped": 0, "failed": 0}
 
 
 def test_plan_index_matches_a_real_run_on_a_pre_path_database(tmp_path, make_epub):
@@ -276,7 +302,13 @@ def test_plan_index_without_a_database_counts_every_file_as_new(tmp_path, make_e
     library = tmp_path / "library"
     make_epub("library/a.epub", title="A", author="AA")
 
-    assert plan_index(library, None) == {"total": 1, "indexed": 1, "updated": 0, "failed": 0}
+    assert plan_index(library, None) == {
+        "total": 1,
+        "indexed": 1,
+        "updated": 0,
+        "skipped": 0,
+        "failed": 0,
+    }
 
 
 def _books_table(db_path, columns, version=SCHEMA_VERSION):
@@ -392,7 +424,7 @@ def test_unreadable_files_stay_warnings(tmp_path, make_corrupt_epub):
 
 
 def test_plan_counts_a_symlink_to_an_indexed_file_as_an_update(tmp_path, make_epub):
-    """Both resolve to one path, so a real run inserts once and updates once."""
+    """Both resolve to one path, so a real run inserts once and skips the second."""
     library = tmp_path / "library"
     make_epub("library/real.epub", title="Real", author="AA")
     (library / "link.epub").symlink_to(library / "real.epub")
@@ -400,7 +432,7 @@ def test_plan_counts_a_symlink_to_an_indexed_file_as_an_update(tmp_path, make_ep
     planned = plan_index(library, None)
     actual = scan_and_index(library, get_database(str(tmp_path / "ebdx.db")))
 
-    assert planned == {"total": 2, "indexed": 1, "updated": 0, "failed": 0}
+    assert planned == {"total": 2, "indexed": 1, "updated": 0, "skipped": 1, "failed": 0}
     assert planned == actual
 
 
