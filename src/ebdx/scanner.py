@@ -161,6 +161,15 @@ def scan_and_index(
                 stats["failed"] += 1
                 continue
 
+            # Metadata and facts must describe the same file version.  A
+            # change during extraction would otherwise save new metadata with
+            # the old facts, allowing a later scan to incorrectly skip it.
+            final_file_stats = get_file_stats(epub_path)
+            if final_file_stats != file_stats:
+                logger.warning(f"File changed while reading {epub_path}; deferring indexing")
+                stats["failed"] += 1
+                continue
+
             try:
                 # save_book keys a book by its absolute path; the resolved path
                 # is also what search results report.

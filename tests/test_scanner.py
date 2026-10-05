@@ -145,6 +145,47 @@ def test_editing_an_epub_refreshes_its_record(tmp_path, make_epub):
     assert rows[0]["title"] == "Second Title"
 
 
+def test_file_changed_during_extraction_is_deferred_until_it_is_stable(
+    tmp_path, make_epub, monkeypatch
+):
+    """Never save metadata for one version with facts from another."""
+    library = tmp_path / "library"
+    epub_path = make_epub("library/book.epub", title="Before", author="AA")
+    db = get_database(str(tmp_path / "ebdx.db"))
+
+    import ebdx.extractor as extractor
+
+    original_extract_metadata = extractor.extract_metadata
+    replaced = False
+
+    def extract_then_replace(path):
+        nonlocal replaced
+        metadata = original_extract_metadata(path)
+        if not replaced:
+            replaced = True
+            make_epub("library/book.epub", title="After", author="AA")
+        return metadata
+
+    monkeypatch.setattr(extractor, "extract_metadata", extract_then_replace)
+
+    assert scan_and_index(library, db) == {
+        "total": 1,
+        "indexed": 0,
+        "updated": 0,
+        "failed": 1,
+    }
+    assert db["books"].count == 0
+
+    assert scan_and_index(library, db) == {
+        "total": 1,
+        "indexed": 1,
+        "updated": 0,
+        "failed": 0,
+    }
+    assert next(db["books"].rows)["title"] == "After"
+    assert epub_path.exists()
+
+
 def test_one_bad_file_does_not_stop_the_run(tmp_path, make_epub, make_corrupt_epub):
     library = tmp_path / "library"
     make_epub("library/good-one.epub", title="Good One", author="AA")
