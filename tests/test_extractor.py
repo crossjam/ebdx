@@ -43,6 +43,24 @@ def test_title_only_epub_leaves_other_text_fields_empty(make_epub):
         assert md[field] == "", field
 
 
+def test_empty_subject_element_is_dropped_from_tags(make_epub):
+    """An empty <dc:subject/> reads back as None; it must not fail the book."""
+    path = make_epub("blank-subject.epub", title="Radical", subjects=[None])
+
+    md = extract_metadata(path)
+
+    assert md is not None
+    assert md["title"] == "Radical"
+    assert md["tags"] == ""
+
+
+def test_empty_subject_element_does_not_hide_real_tags(make_epub):
+    md = extract_metadata(make_epub("mixed.epub", title="M", subjects=["Comics", None, "Memoir"]))
+
+    assert md is not None
+    assert md["tags"] == "Comics, Memoir"
+
+
 def test_series_is_not_extracted(make_epub):
     """Current behaviour, recorded as-is: series is always empty."""
     md = extract_metadata(make_epub("x.epub", title="X"))

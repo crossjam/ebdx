@@ -10,6 +10,16 @@ from pathlib import Path
 from loguru import logger
 
 
+def _text(value: object) -> str:
+    """Return a metadata value as a string.
+
+    An empty element such as ``<dc:subject/>`` reaches us as ``None``, so
+    every value read out of the OPF goes through here before it is stored
+    or joined.
+    """
+    return "" if value is None else str(value)
+
+
 def extract_metadata(epub_path: Path) -> dict | None:
     """Extract metadata from an EPUB file.
 
@@ -25,41 +35,45 @@ def extract_metadata(epub_path: Path) -> dict | None:
         book = epub.read_epub(str(epub_path))
 
         # Extract core metadata
-        title = book.title if book.title else ""
+        title = _text(book.title)
         creators = book.get_metadata("DC", "creator")
-        author = creators[0][0] if creators else ""
+        author = _text(creators[0][0]) if creators else ""
 
         series = ""
         series_index = None
         series_meta = book.get_metadata("OPF", "series")
         if series_meta:
-            series = series_meta[0][0]
+            series = _text(series_meta[0][0])
         series_num_meta = book.get_metadata("OPF", "series_index")
         if series_num_meta:
             with suppress(ValueError, TypeError):
                 series_index = float(series_num_meta[0][0])
 
         publisher_meta = book.get_metadata("DC", "publisher")
-        publisher = publisher_meta[0][0] if publisher_meta else ""
+        publisher = _text(publisher_meta[0][0]) if publisher_meta else ""
 
         date_meta = book.get_metadata("DC", "date")
-        published = date_meta[0][0] if date_meta else ""
+        published = _text(date_meta[0][0]) if date_meta else ""
 
         isbn = ""
         for value, attrs in book.get_metadata("DC", "identifier"):
             # attrs is a dict (e.g. {"scheme": "ISBN"} or a namespaced key);
             # match an ISBN scheme or a urn:isbn: value without assuming shape.
-            haystack = f"{value} {' '.join(str(v) for v in attrs.values())}".lower()
+            haystack = f"{_text(value)} {' '.join(str(v) for v in attrs.values())}".lower()
             if "isbn" in haystack:
-                isbn = value
+                isbn = _text(value)
                 break
 
         language_meta = book.get_metadata("DC", "language")
-        language = language_meta[0][0] if language_meta else ""
+        language = _text(language_meta[0][0]) if language_meta else ""
 
         tags = []
         for subject in book.get_metadata("DC", "subject"):
-            tags.append(subject[0])
+            # An empty <dc:subject/> carries no text; drop it rather than
+            # recording a blank tag.
+            tag = _text(subject[0]).strip()
+            if tag:
+                tags.append(tag)
 
         metadata = {
             "title": title,
