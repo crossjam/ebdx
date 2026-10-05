@@ -88,6 +88,13 @@ from a healthy one by any cheaper means.
   stored are reported as updates and the rest as inserts — and the output names each
   migration that would be applied
 
+#### Scenario: A partial migratable layout names pending migrations
+
+- **WHEN** `schema` is run with the dry-run option against a migratable database without a
+  `books` table
+- **THEN** the output reports creation of the core schema and names each pending migration
+  without changing the database
+
 #### Scenario: A migration keeps stored rows visible
 
 - **WHEN** `search` is run with the dry-run option against a database recorded at an

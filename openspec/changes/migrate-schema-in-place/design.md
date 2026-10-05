@@ -87,11 +87,12 @@ describes goes unnoticed.
 
 ### Each step runs in its own explicit transaction, using raw SQL only
 
-The upgrade loop runs `BEGIN IMMEDIATE`, then `step.apply(db)`, then
-`PRAGMA user_version = step.target`, then `COMMIT`, and rolls back on any exception.
-SQLite's DDL and `user_version` are both transactional, so the step and its stamp land
-together. `IMMEDIATE` takes the write lock up front, so a concurrent `ebdx index` fails
-cleanly at the start instead of midway.
+The upgrade loop runs `BEGIN IMMEDIATE`, rereads `PRAGMA user_version` under that lock,
+then applies the step only if its target is still pending. It stamps `user_version =
+step.target` and commits, rolling back on any exception. SQLite's DDL and `user_version` are
+both transactional, so the step and its stamp land together. Re-reading under the lock lets
+a second opener skip a step another process committed while it waited, instead of repeating
+DDL such as `ALTER TABLE ... ADD COLUMN`.
 
 Both callbacks must use `db.execute` (`ALTER TABLE ... ADD COLUMN`, `CREATE TABLE IF NOT
 EXISTS`, `INSERT ... SELECT`), not sqlite-utils helpers such as `Table.transform` or

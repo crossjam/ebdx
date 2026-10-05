@@ -1046,6 +1046,37 @@ def test_migrations_run_in_order_and_resume_from_an_intermediate_version(tmp_pat
     assert resumed.execute("SELECT second_step FROM books").fetchone()[0] == " completed"
 
 
+def test_migration_rechecks_version_after_acquiring_write_lock(tmp_path, with_migrations):
+    db_path = tmp_path / "concurrent.db"
+    db = get_database(str(db_path))
+    save_book(db, _book())
+    db.conn.close()
+
+    def add_extra(db):
+        db.execute("ALTER TABLE books ADD COLUMN extra TEXT NOT NULL DEFAULT ''")
+
+    step = Migration(
+        2,
+        "add extra metadata",
+        add_extra,
+        {"books": {"extra": _TEXT_COLUMN}},
+        _noop_schema_setup,
+    )
+    with_migrations(step, adds_to_current={"books": {"extra": str}})
+
+    first = sqlite_utils.Database(str(db_path))
+    second = sqlite_utils.Database(str(db_path))
+    db_module._apply_migrations(first, 1)
+    # Simulate an opener that observed version 1 before waiting for the first
+    # connection's lock; after acquiring the lock it must see version 2 and skip.
+    db_module._apply_migrations(second, 1)
+
+    assert second.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert [row[1] for row in second.execute("PRAGMA table_info(books)")].count("extra") == 1
+    first.conn.close()
+    second.conn.close()
+
+
 def test_failed_migration_rolls_back_and_later_open_resumes(tmp_path, with_migrations):
     db_path = tmp_path / "failure.db"
     db = get_database(str(db_path))

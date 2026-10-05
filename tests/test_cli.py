@@ -831,6 +831,39 @@ def test_dry_run_search_and_schema_report_pending_migrations_read_only(
     assert (_fingerprint(db_path), db_path.stat().st_mtime_ns) == (before, before_mtime)
 
 
+def test_dry_run_schema_lists_migrations_for_partial_database(runner, tmp_path, with_migrations):
+    db_path = tmp_path / "partial.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    conn.execute("INSERT INTO authors (name) VALUES ('Existing Author')")
+    conn.execute("PRAGMA user_version = 1")
+    conn.commit()
+    conn.close()
+
+    def add_extra(db):
+        db.execute("ALTER TABLE books ADD COLUMN extra TEXT NOT NULL DEFAULT ''")
+
+    def ensure_nothing(db):
+        pass
+
+    step = Migration(
+        2,
+        "add extra metadata to partial schema",
+        add_extra,
+        {"books": {"extra": _TEXT_COLUMN}},
+        ensure_nothing,
+    )
+    with_migrations(step, adds_to_current={"books": {"extra": str}})
+    before = _fingerprint(db_path)
+
+    result = runner.invoke(cli, ["--dry-run", "schema", "--database", str(db_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "create the books, authors, and full-text schema" in result.output
+    assert "apply migration to version 2: add extra metadata to partial schema" in result.output
+    assert _fingerprint(db_path) == before
+
+
 def test_dry_run_search_shows_no_stale_results_before_a_rebuild(runner, tmp_path):
     """A real open discards these rows, so showing them would be showing ghosts."""
     db_path = tmp_path / "legacy.db"

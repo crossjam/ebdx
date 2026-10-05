@@ -27,6 +27,13 @@ later open SHALL resume from there.
 - **THEN** every intervening step is applied in version order and the recorded version is
   the current one
 
+#### Scenario: Concurrent openers do not repeat a committed step
+
+- **WHEN** two openers observe the same earlier version and the second waits for the first
+  to finish a migration step
+- **THEN** the second re-reads the version under the write lock and skips that already
+  committed step
+
 #### Scenario: Fresh databases include migration-owned schema objects
 
 - **WHEN** a new database is created while migrations define additional managed tables or

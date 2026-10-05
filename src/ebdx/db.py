@@ -292,7 +292,15 @@ def _ensure_schema(db: "Database") -> None:
             _create_core_tables(db, expected["books"], expected["authors"])
         _apply_migrations(db, version)
 
-    needs_version_stamp = db.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    if version > SCHEMA_VERSION:
+        logger.warning(
+            f"Database schema version {version} is newer than this build "
+            f"expects ({SCHEMA_VERSION}); leaving it untouched"
+        )
+        return
+
+    needs_version_stamp = version < SCHEMA_VERSION
     if _fts_index_is_intact(db):
         if needs_version_stamp:
             _create_schema_and_stamp_atomically(db)
@@ -347,15 +355,26 @@ def _repair_search_index_atomically(db: "Database", *, target_version: int | Non
 
 
 def _apply_migrations(db: "Database", version: int) -> None:
-    """Apply each migration after ``version``, committing each step atomically."""
+    """Apply steps after ``version``, atomically skipping steps committed by peers."""
     for migration in _MIGRATIONS:
         if migration.target <= version:
             continue
 
-        # BEGIN IMMEDIATE obtains the writer lock before the first DDL change,
-        # so competing index runs fail before entering a partially applied step.
+        # BEGIN IMMEDIATE serializes schema writers before the first DDL change;
+        # the locked version check below prevents a waiting opener from repeating it.
         db.execute("BEGIN IMMEDIATE")
         try:
+            # Another opener may have completed this step while this connection
+            # waited for the write lock. Re-read under the lock before applying.
+            locked_version = db.execute("PRAGMA user_version").fetchone()[0]
+            if migration.target <= locked_version:
+                db.execute("COMMIT")
+                continue
+            if migration.target != locked_version + 1:
+                raise sqlite3.DatabaseError(
+                    f"cannot apply migration {migration.target} from schema version "
+                    f"{locked_version}"
+                )
             migration.apply(db)
             db.execute(f"PRAGMA user_version = {migration.target}")
             db.execute("COMMIT")
@@ -588,7 +607,14 @@ def describe_pending_schema_work(db: "Database") -> list[str]:
         ]
     tables = db.table_names()
     if "books" not in tables:
-        return ["create the books, authors, and full-text schema"]
+        work = ["create the books, authors, and full-text schema"]
+        if version >= _BASE_VERSION:
+            work.extend(
+                f"apply migration to version {migration.target}: {migration.description}"
+                for migration in _MIGRATIONS
+                if migration.target > version
+            )
+        return work
 
     work = [
         f"apply migration to version {migration.target}: {migration.description}"

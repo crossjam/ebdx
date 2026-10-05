@@ -19,6 +19,7 @@
 - [x] 3.6 Verify added fields fill on re-index: after migrating, `ebdx index` over the same library populates the test step's column for every file, and before re-indexing it holds the empty default.
 - [x] 3.7 Verify a read-only open of a migratable database applies nothing: tables, columns, triggers and `user_version` are unchanged.
 - [x] 3.8 Verify fresh and migratable partial databases create migration-owned objects and match the added columns' nullability/defaults; a partial database without `books` gets its missing core tables at the recorded layout before its steps apply.
+- [x] 3.9 Re-read `user_version` after acquiring `BEGIN IMMEDIATE` and skip a migration another opener already committed; verify by replaying a stale-version migration attempt on a second connection.
 
 ## 4. Dry-run prediction
 
@@ -27,6 +28,7 @@
 - [x] 4.3 Verify `ebdx --dry-run index` against a migratable database reports the same insert/update counts as the real run, names each pending migration, and leaves the file's mtime, `user_version` and layout unchanged.
 - [x] 4.4 Verify `ebdx --dry-run search` against a migratable database shows results from the stored rows, notes the pending migrations, and does not print the "must be re-indexed" message. A `--fts` query on a column only the pending step adds reports "cannot run until that happens" and exits 0.
 - [x] 4.5 Verify `ebdx --dry-run schema` against a migratable database leaves it unchanged and lists the pending migrations.
+- [x] 4.6 Verify a partial migratable database without `books` reports core-schema creation and every pending migration in a read-only schema dry run.
 
 ## 5. Wrap-up
 
