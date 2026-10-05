@@ -6,6 +6,7 @@ for indexing into the database.
 """
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import sqlite_utils
@@ -13,6 +14,7 @@ from loguru import logger
 from rich.console import Console
 
 from ebdx.progress import file_progress, short_name, walk_progress
+from ebdx.utils.file_stats import FileStats, get_file_stats
 
 
 def iter_files(root: Path) -> Iterator[Path]:
@@ -52,6 +54,33 @@ def _find_epub_files(root: Path, *, show_progress: bool) -> list[Path]:
         return sorted(walked)
 
 
+def _saved_file_facts(db: sqlite_utils.Database) -> dict[str, FileStats]:
+    """Return the stored file facts keyed by the canonical book path."""
+    return {
+        row[0]: FileStats(size=row[1], mtime=row[2], content_hash=row[3])
+        for row in db.execute("SELECT path, file_size, file_mtime, content_hash FROM books")
+    }
+
+
+def _facts_match(saved: FileStats | None, current: FileStats) -> bool:
+    """Whether two complete file-fact sets prove a file is unchanged.
+
+    A partial read is deliberately never trusted as a change detector. It is
+    still stored after a successful extraction so a later scan can retry it,
+    but only size, mtime, and content hash together may avoid extraction.
+    """
+    return (
+        saved is not None
+        and all(value is not None for value in (*saved, *current))
+        and saved == current
+    )
+
+
+def _index_timestamp() -> str:
+    """Return an explicit UTC timestamp for a successful indexing write."""
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
 def scan_and_index(
     root: Path,
     db: sqlite_utils.Database,
@@ -79,8 +108,10 @@ def scan_and_index(
 
     Returns:
         A dictionary with per-run counts: ``total`` files found, ``indexed``
-        newly added, ``updated`` already present and refreshed, and
-        ``failed`` skipped because they could not be read.
+        newly added, ``updated`` already present and refreshed, ``skipped``
+        unchanged since their facts were saved, and ``failed`` not indexed
+        because they could not be read, changed while being read, or could
+        not be stored.
     """
     from ebdx.db import save_book
     from ebdx.extractor import extract_metadata
@@ -92,10 +123,14 @@ def scan_and_index(
     epub_files = _find_epub_files(root, show_progress=show_progress)
     console.print(f"[cyan]Found {len(epub_files)} EPUB file(s)[/cyan]")
 
-    stats = {"total": len(epub_files), "indexed": 0, "updated": 0, "failed": 0}
+    stats = {"total": len(epub_files), "indexed": 0, "updated": 0, "skipped": 0, "failed": 0}
 
     if not epub_files:
         return stats
+
+    saved_facts: dict[str, FileStats] = {}
+    if {"file_size", "file_mtime", "content_hash"} <= set(db["books"].columns_dict):
+        saved_facts = _saved_file_facts(db)
 
     with file_progress(
         epub_files,
@@ -103,6 +138,12 @@ def scan_and_index(
         enabled=show_progress,
     ) as tracked:
         for epub_path in tracked:
+            resolved = str(epub_path.resolve())
+            file_stats = get_file_stats(epub_path)
+            if _facts_match(saved_facts.get(resolved), file_stats):
+                stats["skipped"] += 1
+                continue
+
             # Reading a file and storing it fail for different reasons and
             # deserve different levels, so they are caught separately. A file
             # this run could not read is a warning -- expected in a messy
@@ -121,10 +162,27 @@ def scan_and_index(
                 stats["failed"] += 1
                 continue
 
+            # Metadata and facts must describe the same file version.  A
+            # change during extraction would otherwise save new metadata with
+            # the old facts, allowing a later scan to incorrectly skip it.
+            final_file_stats = get_file_stats(epub_path)
+            if final_file_stats != file_stats:
+                logger.warning(f"File changed while reading {epub_path}; deferring indexing")
+                stats["failed"] += 1
+                continue
+
             try:
                 # save_book keys a book by its absolute path; the resolved path
                 # is also what search results report.
-                metadata["path"] = str(epub_path.resolve())
+                metadata.update(
+                    {
+                        "path": resolved,
+                        "file_size": file_stats.size,
+                        "file_mtime": file_stats.mtime,
+                        "content_hash": file_stats.content_hash,
+                        "indexed_at": _index_timestamp(),
+                    }
+                )
                 saved = save_book(db, metadata)
             except Exception as e:
                 logger.error(f"Failed to store {epub_path}: {e}")
@@ -132,6 +190,9 @@ def scan_and_index(
                 continue
 
             stats["indexed" if saved.created else "updated"] += 1
+            # A second path resolving to this file (for example, a symlink)
+            # sees the facts just written and can skip extraction too.
+            saved_facts[resolved] = file_stats
 
     return stats
 
@@ -149,10 +210,10 @@ def plan_index(
     directly comparable. ``db`` is ``None`` when no database exists yet, in
     which case every readable EPUB is a would-be insert.
 
-    Metadata is still extracted, because extraction is a read and it is the
-    only way to know which files would fail; those counts are therefore
-    accurate rather than guessed. That makes a dry run as slow as the real run
-    it predicts, so it gets the same progress display -- see
+    Metadata is extracted only for files whose complete stored facts do not
+    match the current file. That keeps the predicted counts aligned with the
+    real incremental run while still reporting files that would fail during
+    extraction. It gets the same progress display -- see
     :func:`scan_and_index` for what ``show_progress`` means.
     """
     from ebdx.db import UnindexableDatabaseError, plan_mode
@@ -179,14 +240,21 @@ def plan_index(
     epub_files = _find_epub_files(root, show_progress=show_progress)
     console.print(f"[cyan]Found {len(epub_files)} EPUB file(s)[/cyan]")
 
-    stats = {"total": len(epub_files), "indexed": 0, "updated": 0, "failed": 0}
+    stats = {"total": len(epub_files), "indexed": 0, "updated": 0, "skipped": 0, "failed": 0}
 
     if not epub_files:
         return stats
 
     known_paths: set[str] = set()
-    if mode == "compare":
+    saved_facts: dict[str, FileStats] = {}
+    if mode == "compare" and db is not None:
         known_paths = {row[0] for row in db.execute("SELECT path FROM books")}
+        # A version-1 database is readable during a dry run but has not yet
+        # received the file-stat migration a real run applies before scanning.
+        # Treat all of its facts as absent rather than issuing a query for
+        # columns that do not exist yet.
+        if {"file_size", "file_mtime", "content_hash"} <= set(db["books"].columns_dict):
+            saved_facts = _saved_file_facts(db)
 
     with file_progress(
         epub_files,
@@ -195,19 +263,30 @@ def plan_index(
     ) as tracked:
         for epub_path in tracked:
             try:
+                resolved = str(epub_path.resolve())
+                file_stats = get_file_stats(epub_path)
+                if _facts_match(saved_facts.get(resolved), file_stats):
+                    stats["skipped"] += 1
+                    continue
+
                 metadata = extract_metadata(epub_path)
                 if metadata is None:
                     logger.warning(f"No metadata found for {epub_path}")
                     stats["failed"] += 1
                     continue
+                # The real run defers a file that changed during extraction.
+                if get_file_stats(epub_path) != file_stats:
+                    logger.warning(f"File changed while reading {epub_path}; would defer indexing")
+                    stats["failed"] += 1
+                    continue
                 # save_book resolves before keying, so classify against the same form.
-                resolved = str(epub_path.resolve())
                 stats["updated" if resolved in known_paths else "indexed"] += 1
                 # Counted as known from here on: a real run has written this
                 # path by now, so a later file resolving to it -- a symlink
                 # beside its target, say -- is an update rather than a second
                 # insert.
                 known_paths.add(resolved)
+                saved_facts[resolved] = file_stats
             except Exception as e:
                 logger.warning(f"Error processing {epub_path}: {e}")
                 stats["failed"] += 1

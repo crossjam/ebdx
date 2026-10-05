@@ -70,7 +70,6 @@ def _validate_migrations() -> None:
         expected += 1
 
 
-_validate_migrations()
 SCHEMA_VERSION = _BASE_VERSION + len(_MIGRATIONS)
 
 _FTS_TRIGGERS = ("books_ai", "books_ad", "books_au")
@@ -116,9 +115,6 @@ def _validate_migration_columns() -> None:
                         f"migration {migration.target} adds {table}.{name}, but the current "
                         "schema column map does not have its declared type"
                     )
-
-
-_validate_migration_columns()
 
 
 def _validate_fts_query(query: str) -> None:
@@ -953,3 +949,55 @@ def search_books(
         )
 
     return books
+
+
+# File-statistics migration.
+def _apply_file_stats_migration(db: "Database") -> None:
+    """Add nullable file-fact columns to existing book records.
+
+    No column carries a default: the scanner writes ``indexed_at`` explicitly
+    on each successful index write, so rows indexed before this version keep
+    ``NULL`` facts and an unknown indexing time until they are next indexed.
+    The FTS triggers read none of these columns, so the search index is
+    unaffected.
+    """
+    for column, column_type in (
+        ("file_size", "INTEGER"),
+        ("file_mtime", "TEXT"),
+        ("content_hash", "TEXT"),
+        ("indexed_at", "TEXT"),
+    ):
+        db.execute(f"ALTER TABLE books ADD COLUMN {column} {column_type}")
+
+
+def _ensure_file_stats_schema(db: "Database") -> None:
+    """File-stat columns are part of the core books schema."""
+
+
+_FILE_STATS_COLUMNS = {
+    "file_size": AddedColumn(column_type=int),
+    "file_mtime": AddedColumn(column_type=str),
+    "content_hash": AddedColumn(column_type=str),
+    "indexed_at": AddedColumn(column_type=str),
+}
+
+_FILE_STATS_MIGRATION = Migration(
+    target=2,
+    description="add file statistics tracking",
+    apply=_apply_file_stats_migration,
+    adds={"books": _FILE_STATS_COLUMNS},
+    ensure_schema=_ensure_file_stats_schema,
+)
+
+_MIGRATIONS = (_FILE_STATS_MIGRATION,)
+_BOOKS_COLUMNS.update(
+    {
+        "file_size": int,
+        "file_mtime": str,
+        "content_hash": str,
+        "indexed_at": str,
+    }
+)
+_validate_migrations()
+_validate_migration_columns()
+SCHEMA_VERSION = _BASE_VERSION + len(_MIGRATIONS)

@@ -105,6 +105,19 @@ def test_get_database_stamps_schema_version(tmp_path):
     assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
 
 
+def test_fresh_database_leaves_indexed_at_to_the_writer(tmp_path):
+    db = get_database(str(tmp_path / "ebdx.db"))
+
+    indexed_at = _column_schema(db, "books", "indexed_at")
+    assert (indexed_at[2], indexed_at[3], indexed_at[4]) == ("TEXT", 0, None)
+
+    unstamped = save_book(db, _book(path="/library/a.epub"))
+    stamped = save_book(db, _book(path="/library/b.epub", indexed_at="2026-10-05T12:00:00Z"))
+
+    assert db["books"].get(unstamped.id)["indexed_at"] is None
+    assert db["books"].get(stamped.id)["indexed_at"] == "2026-10-05T12:00:00Z"
+
+
 def test_books_path_has_unique_index(tmp_path):
     db = get_database(str(tmp_path / "ebdx.db"))
     assert any(ix.unique and ix.columns == ["path"] for ix in db["books"].indexes)
@@ -974,8 +987,8 @@ def test_migration_preserves_rows_ids_and_search(tmp_path, with_migrations):
 
     migrated = get_database(str(db_path))
 
-    assert db_module.SCHEMA_VERSION == 2
-    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert db_module.SCHEMA_VERSION == SCHEMA_VERSION + 1
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 1
     extra = _column_schema(migrated, "books", "extra")
     assert (extra[2], extra[3], extra[4]) == ("TEXT", 1, "''")
     assert list(migrated.execute("SELECT * FROM books ORDER BY id")) == [
@@ -991,6 +1004,40 @@ def test_migration_preserves_rows_ids_and_search(tmp_path, with_migrations):
     assert migrated.execute("SELECT extra FROM books WHERE id = ?", [first.id]).fetchone()[0] == (
         "fresh value"
     )
+
+
+def test_file_stats_migration_opens_an_existing_version_1_database(tmp_path):
+    """A v1 library upgrades with the production migration under pytest."""
+    db_path = tmp_path / "file-stats-v1.db"
+    legacy = sqlite_utils.Database(str(db_path))
+    version_1 = db_module._expected_columns_at_version(1)
+    legacy["authors"].create(version_1["authors"], pk="id", not_null=["name"])
+    legacy["books"].create(
+        version_1["books"],
+        pk="id",
+        not_null=["title", "path"],
+        foreign_keys=["author_id"],
+    )
+    legacy["books"].create_index(["path"], unique=True)
+    saved = save_book(legacy, _book(title="Dune"))
+    legacy.execute("PRAGMA user_version = 1")
+    legacy.conn.close()
+
+    migrated = get_database(str(db_path))
+
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 2
+    row = migrated["books"].get(saved.id)
+    assert row["title"] == "Dune"
+    # Facts and indexing time for a legacy row are unknown until it is re-indexed.
+    assert {column: row[column] for column in ("file_size", "file_mtime", "content_hash")} == {
+        "file_size": None,
+        "file_mtime": None,
+        "content_hash": None,
+    }
+    assert row["indexed_at"] is None
+    indexed_at = _column_schema(migrated, "books", "indexed_at")
+    assert (indexed_at[2], indexed_at[3], indexed_at[4]) == ("TEXT", 0, None)
+    assert [hit["title"] for hit in search_books(migrated, "Dune")] == ["Dune"]
 
 
 def test_migrations_run_in_order_and_resume_from_an_intermediate_version(tmp_path, with_migrations):
@@ -1025,7 +1072,7 @@ def test_migrations_run_in_order_and_resume_from_an_intermediate_version(tmp_pat
     middle.conn.close()
     conn = sqlite3.connect(str(middle_path))
     conn.execute("ALTER TABLE books ADD COLUMN first_step TEXT NOT NULL DEFAULT ''")
-    conn.execute("PRAGMA user_version = 2")
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
     conn.commit()
     conn.close()
 
@@ -1036,13 +1083,13 @@ def test_migrations_run_in_order_and_resume_from_an_intermediate_version(tmp_pat
     )
 
     migrated = get_database(str(db_path))
-    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 2
     assert migrated.execute("SELECT second_step FROM books").fetchone()[0] == " completed"
     migrated.conn.close()
 
     # A second database already stamped after step one must run only step two.
     resumed = get_database(str(middle_path))
-    assert resumed.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert resumed.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 2
     assert resumed.execute("SELECT second_step FROM books").fetchone()[0] == " completed"
 
 
@@ -1066,12 +1113,13 @@ def test_migration_rechecks_version_after_acquiring_write_lock(tmp_path, with_mi
 
     first = sqlite_utils.Database(str(db_path))
     second = sqlite_utils.Database(str(db_path))
-    db_module._apply_migrations(first, 1)
-    # Simulate an opener that observed version 1 before waiting for the first
-    # connection's lock; after acquiring the lock it must see version 2 and skip.
-    db_module._apply_migrations(second, 1)
+    db_module._apply_migrations(first, SCHEMA_VERSION)
+    # Simulate an opener that observed the production schema version before
+    # waiting for the first connection's lock; after acquiring the lock it
+    # must see the synthetic step's version and skip.
+    db_module._apply_migrations(second, SCHEMA_VERSION)
 
-    assert second.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert second.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 1
     assert [row[1] for row in second.execute("PRAGMA table_info(books)")].count("extra") == 1
     first.conn.close()
     second.conn.close()
@@ -1110,7 +1158,7 @@ def test_failed_migration_rolls_back_and_later_open_resumes(tmp_path, with_migra
     columns = {row[1] for row in conn.execute("PRAGMA table_info(books)")}
     assert "first_step" in columns  # the preceding migration committed
     assert "second_step" not in columns  # the failing step rolled back
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 1
     assert conn.execute("SELECT id FROM books").fetchone()[0] == saved.id
     conn.close()
 
@@ -1126,7 +1174,7 @@ def test_failed_migration_rolls_back_and_later_open_resumes(tmp_path, with_migra
     )
     with_migrations(first, resumed_step, adds_to_current=current_columns)
     resumed = get_database(str(db_path))
-    assert resumed.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert resumed.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 2
     assert resumed.execute("SELECT id FROM books").fetchone()[0] == saved.id
 
 
@@ -1156,7 +1204,7 @@ def test_migratable_version_is_recognised_for_dry_run_planning(tmp_path, with_mi
     assert not would_fail_to_open(readonly)
     assert would_repair_search(readonly)
     assert describe_pending_schema_work(readonly) == [
-        "apply migration to version 2: add extra metadata"
+        f"apply migration to version {SCHEMA_VERSION + 1}: add extra metadata"
     ]
 
 
@@ -1259,7 +1307,7 @@ def test_failed_post_migration_fts_repair_is_retryable(monkeypatch, tmp_path, wi
         get_database(str(db_path))
 
     after_failure = get_database(str(db_path), read_only=True)
-    assert after_failure.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert after_failure.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 1
     assert not db_module._fts_index_is_intact(after_failure)
 
     monkeypatch.setattr(db_module, "_repopulate_fts", original_repopulate)
@@ -1294,7 +1342,7 @@ def test_migration_owned_schema_objects_exist_in_fresh_and_partial_databases(
     assert "migrated_field" in fresh["books"].columns_dict
     fresh_field = _column_schema(fresh, "books", "migrated_field")
     assert (fresh_field[2], fresh_field[3], fresh_field[4]) == ("TEXT", 1, "''")
-    assert fresh.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert fresh.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 1
 
     partial_path = tmp_path / "partial.db"
     conn = sqlite3.connect(str(partial_path))
@@ -1310,7 +1358,7 @@ def test_migration_owned_schema_objects_exist_in_fresh_and_partial_databases(
     assert "migrated_field" in partial["books"].columns_dict
     partial_field = _column_schema(partial, "books", "migrated_field")
     assert (partial_field[2], partial_field[3], partial_field[4]) == ("TEXT", 1, "''")
-    assert partial.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert partial.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 1
     assert partial.execute("SELECT name FROM authors").fetchone()[0] == "Existing Author"
 
 
@@ -1336,5 +1384,5 @@ def test_read_only_open_does_not_apply_pending_migrations(tmp_path, with_migrati
     readonly = get_database(str(db_path), read_only=True)
 
     assert _schema_fingerprint(db_path) == before
-    assert readonly.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert readonly.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert "extra" not in readonly["books"].columns_dict

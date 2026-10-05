@@ -1,0 +1,4 @@
+id: record-file-stats
+feature: true
+type:
+  - enhancement
