@@ -98,8 +98,11 @@ index from the current `_FTS_COLUMNS` and trigger definitions, and `_repopulate_
 it.
 
 This keeps one rebuild path. It always builds the current definition, never an intermediate
-one, so a jump of several versions rebuilds once. If the process dies between the last step
-and the repair, the next open sees a missing index and repairs it.
+one, so a jump of several versions rebuilds once. The repair itself runs in one explicit
+transaction covering the drop, recreation, trigger installation and refill. If the process
+dies after the last migration commits or during the repair, the index remains absent (or
+otherwise detectably broken), so the next open retries; an empty index is never committed as
+intact.
 
 *Alternative:* each step rebuilds the index to its own version's definition. That repeats the
 work on multi-step jumps, and it needs historical copies of the index definition, which is

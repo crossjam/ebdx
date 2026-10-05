@@ -1125,6 +1125,47 @@ def test_migration_rebuilds_extended_search_index_and_triggers(tmp_path, with_mi
     assert search_books(migrated, "extra_search:stellar", fts=True)[0]["id"] == saved.id
 
 
+def test_failed_post_migration_fts_repair_is_retryable(monkeypatch, tmp_path, with_migrations):
+    db_path = tmp_path / "retry-fts.db"
+    db = get_database(str(db_path))
+    save_book(db, _book(path="/library/dune.epub", title="Dune"))
+    db.conn.close()
+
+    def add_search_field(db):
+        db.execute("ALTER TABLE books ADD COLUMN extra_search TEXT NOT NULL DEFAULT ''")
+        db_module._drop_fts(db)
+
+    step = Migration(
+        2,
+        "index the extra search field",
+        add_search_field,
+        {"books": {"extra_search": str}},
+        rebuilds_search=True,
+    )
+    with_migrations(
+        step,
+        adds_to_current={"books": {"extra_search": str}},
+        fts_columns=(*db_module._FTS_COLUMNS, "extra_search"),
+    )
+    original_repopulate = db_module._repopulate_fts
+
+    def fail_repopulation(db):
+        raise RuntimeError("simulated interruption during FTS refill")
+
+    monkeypatch.setattr(db_module, "_repopulate_fts", fail_repopulation)
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        get_database(str(db_path))
+
+    after_failure = get_database(str(db_path), read_only=True)
+    assert after_failure.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert not db_module._fts_index_is_intact(after_failure)
+
+    monkeypatch.setattr(db_module, "_repopulate_fts", original_repopulate)
+    recovered = get_database(str(db_path))
+    assert db_module._fts_index_is_intact(recovered)
+    assert [hit["title"] for hit in search_books(recovered, "Dune")] == ["Dune"]
+
+
 def test_read_only_open_does_not_apply_pending_migrations(tmp_path, with_migrations):
     db_path = tmp_path / "readonly-migration.db"
     db = get_database(str(db_path))

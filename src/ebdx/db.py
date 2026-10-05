@@ -254,8 +254,9 @@ def _ensure_schema(db: "Database") -> None:
     elif _BASE_VERSION <= version < SCHEMA_VERSION and "books" in tables:
         _apply_migrations(db, version)
 
-    repairing_fts = False
-    if not _fts_index_is_intact(db):
+    if _fts_index_is_intact(db):
+        _create_schema(db)
+    else:
         # Warn only when there are books whose index is being rebuilt; on a
         # new database the index is simply absent and nothing was lost.
         if _stored_book_count(db):
@@ -263,19 +264,33 @@ def _ensure_schema(db: "Database") -> None:
                 "The books_fts search index is missing or is not an FTS5 "
                 "table; rebuilding it from the stored books"
             )
-        _drop_fts(db)
-        repairing_fts = True
-
-    _create_schema(db)
-
-    if repairing_fts:
-        _repopulate_fts(db)
+        _repair_search_index_atomically(db)
 
     # New files, pre-path rebuilds, and empty/incomplete files can move
     # directly to the current schema. Migrated databases were stamped inside
     # each migration transaction; writing the final value again is harmless.
     if version < SCHEMA_VERSION:
         db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def _repair_search_index_atomically(db: "Database") -> None:
+    """Recreate and refill the FTS index in one recoverable transaction.
+
+    A migration may have committed after dropping ``books_fts``. Keeping the
+    drop, create, trigger installation, and refill in one transaction means
+    an interruption leaves the index absent (and detectable on the next open)
+    rather than present but empty.
+    """
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        _drop_fts(db)
+        _create_schema(db)
+        _repopulate_fts(db)
+        db.execute("COMMIT")
+    except BaseException:
+        if db.conn.in_transaction:
+            db.execute("ROLLBACK")
+        raise
 
 
 def _apply_migrations(db: "Database", version: int) -> None:

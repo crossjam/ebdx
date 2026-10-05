@@ -15,7 +15,7 @@
 - [ ] 3.2 Add the upgrade loop: for each pending step, `BEGIN IMMEDIATE`, apply, stamp `user_version = target`, `COMMIT`, rolling back on error and re-raising. Run it before the index repair and `_create_schema`. Verify with a test that a single test step adding a column migrates a populated version-1 database, keeping every book, author and row id.
 - [ ] 3.3 Verify multi-step ordering: two test steps whose second depends on the first apply in order from version 1, and a database already at the intermediate version applies only the second.
 - [ ] 3.4 Verify atomicity and resume: a step whose second statement fails leaves `user_version` at the start version and none of its first statement's effect. After swapping in a working step, the next open completes the upgrade.
-- [ ] 3.5 Verify the search-index path: a test step that adds an indexed column and drops `books_fts` leaves, after open, an index with the new column that returns every previously matching book and matches the new column once a book is re-saved with a value.
+- [ ] 3.5 Verify the search-index path: a test step that adds an indexed column and drops `books_fts` leaves, after open, an index with the new column that returns every previously matching book and matches the new column once a book is re-saved with a value. Inject a refill failure after recreation and verify the repair rolls back so a later open retries it.
 - [ ] 3.6 Verify added fields fill on re-index: after migrating, `ebdx index` over the same library populates the test step's column for every file, and before re-indexing it holds the empty default.
 - [ ] 3.7 Verify a read-only open of a migratable database applies nothing: tables, columns, triggers and `user_version` are unchanged.
 

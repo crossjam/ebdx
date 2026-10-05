@@ -34,6 +34,13 @@ later open SHALL resume from there.
 - **THEN** the search returns that book, including after a step that rebuilds the full-text
   index
 
+#### Scenario: An interrupted full-text rebuild is retried
+
+- **WHEN** a migration commits after dropping the full-text index and the process is
+  interrupted while the index is being recreated and refilled
+- **THEN** the incomplete repair is rolled back, the index remains detectably absent or
+  broken, and a later open recreates and refills it before returning
+
 #### Scenario: Added fields are empty until re-indexed
 
 - **WHEN** a migration adds a field to book records and the library is then indexed
