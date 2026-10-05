@@ -157,25 +157,15 @@ def diagnostic_terminal(monkeypatch) -> io.StringIO:
 def with_migrations(monkeypatch):
     """Patch ebdx.db with a test-only migration history and resulting layout.
 
-    The production file-statistics migration is always registered, including
-    under pytest. These migration-framework tests intentionally start from the
-    version-1 layout so their synthetic steps can own version 2.
+    The production file-statistics migration stays registered, including under
+    pytest. Synthetic steps are rebased after it, so their historical target
+    numbers can still describe a self-contained test sequence without
+    disabling real migrations.
     """
     from ebdx import db
 
-    books = dict(db._BOOKS_COLUMNS)
-    authors = dict(db._AUTHORS_COLUMNS)
-    for migration in db._MIGRATIONS:
-        for table, columns in migration.adds.items():
-            current = {"books": books, "authors": authors}.get(table)
-            if current is not None:
-                for column in columns:
-                    current.pop(column, None)
-
-    monkeypatch.setattr(db, "_MIGRATIONS", ())
-    monkeypatch.setattr(db, "SCHEMA_VERSION", db._BASE_VERSION)
-    monkeypatch.setattr(db, "_BOOKS_COLUMNS", books)
-    monkeypatch.setattr(db, "_AUTHORS_COLUMNS", authors)
+    production_migrations = db._MIGRATIONS
+    production_version = db.SCHEMA_VERSION
 
     def configure(*steps, adds_to_current=None, fts_columns=None):
         books = dict(db._BOOKS_COLUMNS)
@@ -184,8 +174,10 @@ def with_migrations(monkeypatch):
         for table, columns in (adds_to_current or {}).items():
             current_columns[table].update(columns)
 
-        monkeypatch.setattr(db, "_MIGRATIONS", tuple(steps))
-        monkeypatch.setattr(db, "SCHEMA_VERSION", db._BASE_VERSION + len(steps))
+        offset = production_version - db._BASE_VERSION
+        rebased_steps = tuple(step._replace(target=step.target + offset) for step in steps)
+        monkeypatch.setattr(db, "_MIGRATIONS", (*production_migrations, *rebased_steps))
+        monkeypatch.setattr(db, "SCHEMA_VERSION", production_version + len(rebased_steps))
         monkeypatch.setattr(db, "_BOOKS_COLUMNS", books)
         monkeypatch.setattr(db, "_AUTHORS_COLUMNS", authors)
         if fts_columns is not None:

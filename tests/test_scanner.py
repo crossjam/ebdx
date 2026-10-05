@@ -43,6 +43,10 @@ def test_scan_and_index_stores_an_extracted_epub(tmp_path, make_epub):
     assert len(rows) == 1
     assert rows[0]["title"] == "Dune"
     assert rows[0]["path"] == str(epub_path.resolve())
+    assert rows[0]["file_size"] == epub_path.stat().st_size
+    assert rows[0]["file_mtime"] is not None
+    assert rows[0]["content_hash"] is not None
+    assert rows[0]["indexed_at"] is not None
 
     assert [hit["title"] for hit in search_books(db, "Dune")] == ["Dune"]
 
@@ -72,7 +76,7 @@ def test_empty_directory_reports_zero(tmp_path):
     }
 
 
-def test_second_run_reports_every_file_as_updated(tmp_path, make_epub):
+def test_second_run_skips_files_with_matching_complete_facts(tmp_path, make_epub, monkeypatch):
     library = tmp_path / "library"
     make_epub("library/a.epub", title="A", author="AA")
     make_epub("library/b.epub", title="B", author="BB")
@@ -81,11 +85,17 @@ def test_second_run_reports_every_file_as_updated(tmp_path, make_epub):
     first = scan_and_index(library, db)
     assert (first["indexed"], first["updated"], first["failed"]) == (2, 0, 0)
 
+    import ebdx.extractor as extractor
+
+    def extraction_should_not_run(_path):
+        raise AssertionError("unchanged EPUB was extracted")
+
+    monkeypatch.setattr(extractor, "extract_metadata", extraction_should_not_run)
     second = scan_and_index(library, db)
     assert (second["total"], second["indexed"], second["updated"], second["failed"]) == (
         2,
         0,
-        2,
+        0,
         0,
     )
     assert db["books"].count == 2
@@ -101,8 +111,23 @@ def test_counts_distinguish_a_new_file_from_updates(tmp_path, make_epub):
     stats = scan_and_index(library, db)
 
     assert stats["indexed"] == 1
-    assert stats["updated"] == 1
+    assert stats["updated"] == 0
     assert db["books"].count == 2
+
+
+def test_incomplete_saved_facts_force_a_refresh(tmp_path, make_epub):
+    library = tmp_path / "library"
+    make_epub("library/a.epub", title="A", author="AA")
+    db = get_database(str(tmp_path / "ebdx.db"))
+    scan_and_index(library, db)
+
+    row = next(db["books"].rows)
+    db["books"].update(row["id"], {"content_hash": None})
+
+    stats = scan_and_index(library, db)
+
+    assert stats == {"total": 1, "indexed": 0, "updated": 1, "failed": 0}
+    assert db["books"].get(row["id"])["content_hash"] is not None
 
 
 def test_editing_an_epub_refreshes_its_record(tmp_path, make_epub):
@@ -334,7 +359,7 @@ def test_plan_counts_a_symlink_to_an_indexed_file_as_an_update(tmp_path, make_ep
     planned = plan_index(library, None)
     actual = scan_and_index(library, get_database(str(tmp_path / "ebdx.db")))
 
-    assert planned == {"total": 2, "indexed": 1, "updated": 1, "failed": 0}
+    assert planned == {"total": 2, "indexed": 1, "updated": 0, "failed": 0}
     assert planned == actual
 
 

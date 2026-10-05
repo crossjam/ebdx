@@ -9,7 +9,8 @@ rather than piling up duplicates.
 
 ## Requirements
 
-Python 3.13 or newer. No services, no configuration file — just a SQLite file.
+Python 3.13 or newer.
+No services, no configuration file — just a SQLite file.
 
 ## Install
 
@@ -57,15 +58,16 @@ $ ebdx search Asimov
 └────────────┴──────────────┴────────┴───────┴─────────────────────────────┘
 ```
 
-Indexing is idempotent. Running it again over an unchanged library updates every row
-in place instead of inserting duplicates:
+Indexing is incremental.
+Running it again hashes each EPUB, then skips metadata extraction and database writes
+when its size, modification time, and content hash match the stored facts:
 
 ```console
 $ ebdx index ~/books
 ...
 │ Total found   │     3 │
 │ Newly indexed │     0 │
-│ Updated       │     3 │
+│ Updated       │     0 │
 │ Failed        │     0 │
 ```
 
@@ -88,18 +90,18 @@ Global options, which go before the subcommand:
 - `-q`, `--quiet` — errors only
 - `--dry-run` — report what would change, and change nothing ([Dry run](#dry-run))
 
-By default only warnings and errors are logged. Command results are printed regardless.
+By default only warnings and errors are logged.
+Command results are printed regardless.
 
-`index`, `search`, and `schema` accept `-d/--database PATH` to use a database other
-than the default. `search` also takes `-l/--limit N` (default 20) and
-`--fts`/`--raw`, which reads the query as an FTS5 expression instead of literal
-text ([search](#search)).
+`index`, `search`, and `schema` accept `-d/--database PATH` to use a database other than
+the default. `search` also takes `-l/--limit N` (default 20) and `--fts`/`--raw`, which
+reads the query as an FTS5 expression instead of literal text ([search](#search)).
 
 ### discover
 
-Finds `.epub` files without creating or opening a database. The extension is matched
-case-insensitively, so `BOOK.EPUB` is found too, and directory symlinks are not
-followed.
+Finds `.epub` files without creating or opening a database.
+The extension is matched case-insensitively, so `BOOK.EPUB` is found too, and directory
+symlinks are not followed.
 
 ```console
 $ ebdx discover ~/books
@@ -116,31 +118,31 @@ $ ebdx discover ~/books
 ### search
 
 A query is **literal text**. Its words are searched for together across the indexed
-columns `title`, `author`, `series`, and `tags`, and a book matches when it carries
-all of them — in any column, adjacent or not:
+columns `title`, `author`, `series`, and `tags`, and a book matches when it carries all
+of them — in any column, adjacent or not:
 
 ```console
 $ ebdx search "Dune"
 $ ebdx search "Herbert Dune"      # both words, wherever they sit
 ```
 
-Punctuation is part of the words, so nothing needs escaping and no title can be
-rejected as a bad query:
+Punctuation is part of the words, so nothing needs escaping and no title can be rejected
+as a bad query:
 
 ```console
 $ ebdx search "Ender's"
                           Search Results (1 found)
 ```
 
-`Dune, Messiah`, `Mr. Mercedes`, `Moby-Dick; or, The Whale` and `R_AND_D, Inc.` are
-all ordinary queries. So is anything that merely looks like syntax — `AND`, `-Dune`,
-`badcol:Dune`, an unbalanced quote — which is searched for rather than interpreted
-or refused.
+`Dune, Messiah`, `Mr. Mercedes`, `Moby-Dick; or, The Whale` and `R_AND_D, Inc.` are all
+ordinary queries. So is anything that merely looks like syntax — `AND`, `-Dune`,
+`badcol:Dune`, an unbalanced quote — which is searched for rather than interpreted or
+refused.
 
-A query *starting* with `-` is the one that needs help, and not from the search
-engine: the shell convention is that a leading dash introduces an option, so `ebdx`
-reads it as one before the query is ever looked at. Separate it with `--`, as with
-any other command:
+A query *starting* with `-` is the one that needs help, and not from the search engine:
+the shell convention is that a leading dash introduces an option, so `ebdx` reads it as
+one before the query is ever looked at.
+Separate it with `--`, as with any other command:
 
 ```console
 $ ebdx search -- "-Dune"
@@ -169,16 +171,15 @@ expression *beginning* with `-` is read as an option before the search sees it.
 $ ebdx search --fts -- "-series:Chronicles title:Dune"
 ```
 
-That form searches every column but `series` for "Chronicles", and still requires
-`title:Dune` — it does not drop books in the series, which is what `NOT` above is
-for.
+That form searches every column but `series` for “Chronicles”, and still requires
+`title:Dune` — it does not drop books in the series, which is what `NOT` above is for.
 
-Note that `NEAR` is a function in FTS5, not an infix operator. The FTS3/4 spelling
-`Frank NEAR Herbert` parses without error but is read as three ordinary terms — one
-of them the word "near" — so it quietly matches nothing.
+Note that `NEAR` is a function in FTS5, not an infix operator.
+The FTS3/4 spelling `Frank NEAR Herbert` parses without error but is read as three
+ordinary terms — one of them the word “near” — so it quietly matches nothing.
 
-Under the flag the engine's errors are yours too: a query FTS5 cannot parse is
-reported and exits non-zero, rather than quietly matching nothing.
+Under the flag the engine’s errors are yours too: a query FTS5 cannot parse is reported
+and exits non-zero, rather than quietly matching nothing.
 
 ```console
 $ ebdx search --fts 'badcol:Dune'
@@ -189,10 +190,11 @@ $ ebdx search 'badcol:Dune'      # without the flag, an ordinary search
 No results found.
 ```
 
-Why the default is literal: FTS5's grammar claims `"`, `:`, `*`, `(`, `)`, `{`, `}`,
+Why the default is literal: FTS5’s grammar claims `"`, `:`, `*`, `(`, `)`, `{`, `}`,
 `^`, `+` and a leading `-`, and rejects most other punctuation outright, so ordinary
-titles fail to parse as expressions. Guessing which of the two a user meant needs a
-copy of FTS5's lexer, and a copy drifts. Asking is cheaper and cannot be wrong.
+titles fail to parse as expressions.
+Guessing which of the two a user meant needs a copy of FTS5’s lexer, and a copy drifts.
+Asking is cheaper and cannot be wrong.
 
 ### Dry run
 
@@ -241,10 +243,10 @@ A file that cannot be read is still counted under `Would fail` — determining t
 only a read.
 
 `search` and `schema` look like reads, but a normal open of the database creates missing
-tables, stamps the schema version, and rebuilds a damaged search index. Under `--dry-run`
-they skip that check and connect through SQLite's read-only URI, so the open cannot write
-even by accident. They report the repairs a real open would have performed instead of
-performing them:
+tables, stamps the schema version, and rebuilds a damaged search index.
+Under `--dry-run` they skip that check and connect through SQLite’s read-only URI, so
+the open cannot write even by accident.
+They report the repairs a real open would have performed instead of performing them:
 
 ```console
 $ ebdx --dry-run schema
@@ -258,8 +260,8 @@ in a pipeline.
 
 #### It declines to guess
 
-For a database layout `ebdx` did not write, a dry run does not predict counts. It names
-what is wrong, tells you to rebuild, and exits non-zero:
+For a database layout `ebdx` did not write, a dry run does not predict counts.
+It names what is wrong, tells you to rebuild, and exits non-zero:
 
 ```console
 $ ebdx --dry-run search Asimov
@@ -271,19 +273,20 @@ Aborted!
 ```
 
 Predicting those cases would mean reproducing the whole schema-setup and write path, and
-any subset of tables, columns, indexes, and triggers can be absent. A copy of that logic
-drifts from the original, and a missed corner is a dry run promising a run that cannot
-happen. Re-indexing from the EPUBs on disk is cheap, so it says so.
+any subset of tables, columns, indexes, and triggers can be absent.
+A copy of that logic drifts from the original, and a missed corner is a dry run
+promising a run that cannot happen.
+Re-indexing from the EPUBs on disk is cheap, so it says so.
 
 Recognition is structural: which tables and columns exist, that `books_fts` is an FTS5
-table, and that the index over `books.path` exists and is unique. It stops there — stored
-SQL text is never compared against the text this build emits, so a trigger kept under its
-own name with a rewritten body still reads as healthy.
+table, and that the index over `books.path` exists and is unique.
+It stops there — stored SQL text is never compared against the text this build emits, so
+a trigger kept under its own name with a rewritten body still reads as healthy.
 
-A database recorded at an earlier layout is a different case: a real run rebuilds it from
-scratch, so the dry run reports every readable file as a would-be insert. Because that
-rebuild discards what is stored now, `ebdx --dry-run search` shows no results against
-one and says the library must be re-indexed first.
+A database recorded at an earlier layout is a different case: a real run rebuilds it
+from scratch, so the dry run reports every readable file as a would-be insert.
+Because that rebuild discards what is stored now, `ebdx --dry-run search` shows no
+results against one and says the library must be re-indexed first.
 
 ## Where things live
 
@@ -291,26 +294,26 @@ The database defaults to the XDG data directory — on Linux
 `~/.local/share/ebdx/ebdx.db`. Run `ebdx about` to see the resolved paths on your
 system, or pass `--database` to put it somewhere else.
 
-Stored paths are absolute and resolved, so indexing `.` and then `~/books` records
-each file once rather than twice. Moving a library orphans its rows: index the new
-location and the old rows remain until the database is rebuilt.
+Stored paths are absolute and resolved, so indexing `.` and then `~/books` records each
+file once rather than twice.
+Moving a library orphans its rows: index the new location and the old rows remain until
+the database is rebuilt.
 
-If the search index is ever found damaged — dropped, or replaced by a non-FTS5
-table — it is rebuilt from the stored books the next time the database is opened.
-Your book rows are kept; only the derived index is recomputed. Run the command under
-`--dry-run` to see that a rebuild is pending without triggering it.
+If the search index is ever found damaged — dropped, or replaced by a non-FTS5 table —
+it is rebuilt from the stored books the next time the database is opened.
+Your book rows are kept; only the derived index is recomputed.
+Run the command under `--dry-run` to see that a rebuild is pending without triggering
+it.
 
 ## Limitations
 
 These are deliberate for now, not oversights:
 
-- **`series` is not extracted.** The extractor reads Dublin Core metadata, and
-  Calibre records series as `<meta name="calibre:series" content="…">`, which it does
-  not match. The `Series` and `Index` columns are therefore empty for essentially
-  every book. The schema and the FTS index already carry the fields, so filling them
-  in later needs no migration.
-- **No change detection.** Re-indexing re-reads every EPUB; there is no mtime or size
-  check to skip unchanged files.
+- **`series` is not extracted.** The extractor reads Dublin Core metadata, and Calibre
+  records series as `<meta name="calibre:series" content="…">`, which it does not match.
+  The `Series` and `Index` columns are therefore empty for essentially every book.
+  The schema and the FTS index already carry the fields, so filling them in later needs
+  no migration.
 - **`.epub` only.** No other formats, no cover extraction, no indexing of book text —
   metadata only.
 - **No pruning.** Rows whose files have been deleted or moved are not removed.
@@ -325,5 +328,5 @@ $ uv run poe qa          # ruff + ty + pytest
 Individual tasks: `poe lint`, `poe lint:fix`, `poe format`, `poe type`, `poe test`,
 `poe test:cov`. Run `uv run poe --help` for the full list.
 
-Test EPUBs are generated rather than committed: `tests/conftest.py` builds minimal
-valid files at whatever metadata a test needs, so no book binaries live in the repo.
+Test EPUBs are generated rather than committed: `tests/conftest.py` builds minimal valid
+files at whatever metadata a test needs, so no book binaries live in the repo.

@@ -759,9 +759,11 @@ def test_dry_run_index_predicts_migratable_layout_without_mutating_it(
     )
 
     assert dry.exit_code == 0, dry.output
-    assert "apply migration to version 2: add extra metadata" in dry.output
+    assert (
+        f"apply migration to version {db_module.SCHEMA_VERSION}: add extra metadata" in dry.output
+    )
     assert "│ Would index  │     1 │" in dry.output
-    assert "│ Would update │     1 │" in dry.output
+    assert "│ Would update │     0 │" in dry.output
     assert (_fingerprint(db_path), db_path.stat().st_mtime_ns) == (before, before_mtime)
 
     from ebdx import extractor
@@ -778,10 +780,10 @@ def test_dry_run_index_predicts_migratable_layout_without_mutating_it(
     real = runner.invoke(cli, ["index", str(tmp_path / "library"), "--database", str(db_path)])
     assert real.exit_code == 0, real.output
     assert "│ Newly indexed │     1 │" in real.output
-    assert "│ Updated       │     1 │" in real.output
+    assert "│ Updated       │     0 │" in real.output
     conn = sqlite3.connect(str(db_path))
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
-    assert {row[0] for row in conn.execute("SELECT extra FROM books")} == {"extracted by index"}
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db_module.SCHEMA_VERSION
+    assert {row[0] for row in conn.execute("SELECT extra FROM books")} == {"", "extracted by index"}
     conn.close()
 
 
@@ -815,7 +817,10 @@ def test_dry_run_search_and_schema_report_pending_migrations_read_only(
 
     search = runner.invoke(cli, ["--dry-run", "search", "Dune", "--database", str(db_path)])
     assert search.exit_code == 0, search.output
-    assert "apply migration to version 2: index extra search text" in search.output
+    assert (
+        f"apply migration to version {db_module.SCHEMA_VERSION}: index extra search text"
+        in search.output
+    )
     assert "Dune" in search.output
 
     needs_migration = runner.invoke(
@@ -827,7 +832,10 @@ def test_dry_run_search_and_schema_report_pending_migrations_read_only(
 
     schema = runner.invoke(cli, ["--dry-run", "schema", "--database", str(db_path)])
     assert schema.exit_code == 0, schema.output
-    assert "apply migration to version 2: index extra search text" in schema.output
+    assert (
+        f"apply migration to version {db_module.SCHEMA_VERSION}: index extra search text"
+        in schema.output
+    )
     assert (_fingerprint(db_path), db_path.stat().st_mtime_ns) == (before, before_mtime)
 
 
@@ -860,7 +868,10 @@ def test_dry_run_schema_lists_migrations_for_partial_database(runner, tmp_path, 
 
     assert result.exit_code == 0, result.output
     assert "create the books, authors, and full-text schema" in result.output
-    assert "apply migration to version 2: add extra metadata to partial schema" in result.output
+    assert (
+        f"apply migration to version {db_module.SCHEMA_VERSION}: "
+        "add extra metadata to partial schema"
+    ) in result.output
     assert _fingerprint(db_path) == before
 
 
