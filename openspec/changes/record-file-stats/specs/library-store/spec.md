@@ -1,83 +1,73 @@
-# Library Store Specification
+## ADDED Requirements
 
-## Overview
+### Requirement: Book records retain file facts from successful index writes
 
-The library store manages persistent storage of book metadata and file statistics in a SQLite database. This specification defines the extended schema to include file-level information.
+The store SHALL retain nullable `file_size`, `file_mtime`, `content_hash`, and
+`indexed_at` fields with every book record. `file_size` SHALL be the file size in bytes,
+`file_mtime` and `indexed_at` SHALL be ISO-8601 UTC timestamps, and `content_hash` SHALL
+be a lowercase hexadecimal SHA-256 digest when available. `indexed_at` SHALL identify
+the successful write that recorded the metadata and file facts, not a later scan that
+skipped the file.
 
-## Schema Changes
+The store SHALL write `indexed_at` explicitly in application code. It SHALL NOT rely on
+a SQLite `ALTER TABLE ... ADD COLUMN` default expression for that value.
 
-### Books Table Extensions
+#### Scenario: A newly indexed book records its file facts
 
-The `books` table will be extended with four new columns:
+- **WHEN** a readable EPUB is indexed successfully
+- **THEN** its book record contains its size, UTC modification time, SHA-256 hash, and
+  the UTC time of that write
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `file_size` | INTEGER | Size of the file in bytes |
-| `file_mtime` | TEXT | Modification time as ISO-8601 UTC timestamp |
-| `content_hash` | TEXT | SHA-256 hash of file contents |
-| `indexed_at` | TEXT | When this entry was last written (ISO-8601 UTC) |
+#### Scenario: A changed book refreshes its facts and write time
 
-### Column Details
+- **WHEN** a stored EPUB has changed and is indexed successfully again
+- **THEN** its existing record is updated with the newly observed file facts and a later
+  `indexed_at` value, without creating another book record
 
-1. **`file_size`** (INTEGER, nullable)
-   - File size in bytes as reported by `os.stat().st_size`
-   - NULL for files that cannot be accessed
+#### Scenario: A skipped book retains its write time
 
-2. **`file_mtime`** (TEXT, nullable)
-   - File modification time in ISO-8601 UTC format
-   - Example: "2026-10-05T14:30:22Z"
-   - NULL for files that cannot be accessed
+- **WHEN** a scan determines that a stored EPUB is unchanged and skips it
+- **THEN** its `indexed_at` value is unchanged
 
-3. **`content_hash`** (TEXT, nullable)
-   - SHA-256 hash of the file's contents
-   - Lowercase hexadecimal representation
-   - NULL when hashing fails or is skipped
+#### Scenario: A hash is unavailable
 
-4. **`indexed_at`** (TEXT, NOT NULL, DEFAULT CURRENT_TIMESTAMP)
-   - Timestamp when this record was last written
-   - Updated on every index operation
-   - ISO-8601 UTC format
+- **WHEN** metadata and other file facts can be saved but computing the content hash is
+  not available
+- **THEN** the record may retain `NULL` for `content_hash` without inventing a digest
 
-## Migration Strategy
+### Requirement: File facts migrate without discarding history
 
-### Version Bump
-- Current schema version will be incremented
-- Migration will be atomic and rollback-safe
+When upgrading a database written before file facts existed, the store SHALL migrate it
+in place using the established atomic migration mechanism. The migration SHALL add
+nullable columns without a non-constant SQLite default; existing values in every
+pre-existing book and author record SHALL be retained.
 
-### Backward Compatibility
-- New columns are nullable (except `indexed_at` which has a default)
-- Existing records will have NULL values until re-indexed
-- Database reads will handle NULL values gracefully
+#### Scenario: A legacy database opens successfully
 
-### Fresh Database Initialization
-- New databases will include the extended schema
-- Default values will be applied appropriately
-- Migration ensures consistency between fresh and upgraded databases
+- **WHEN** a database at the immediately preceding migratable version is opened
+- **THEN** it reaches the current schema version with all pre-existing book and author
+  rows intact, and its new file-fact fields are `NULL`
 
-## Data Flow
+#### Scenario: Legacy timestamp history remains unknown
 
-### On Index Operations
-1. Stat file to get size and modification time
-2. Compare with stored values if record exists
-3. Skip extraction if unchanged (optimization)
-4. Compute SHA-256 hash of file contents
-5. Update all fields including `indexed_at`
-6. Store results in database
+- **WHEN** a book row existed before `indexed_at` was introduced
+- **THEN** its `indexed_at` is `NULL` until that book is successfully written by a later
+  index run
 
-### On Database Reads
-1. Query can filter by file characteristics
-2. NULL values handled gracefully
-3. Missing file detection based on stale timestamps
-4. Moved file detection via content hashes
+### Requirement: The scanner can retrieve saved file facts by path
 
-## Error Handling
+The store SHALL provide a path-keyed read operation that returns the saved size and
+modification time for a book path without modifying the row. It SHALL distinguish a
+missing book record from one whose file-fact fields are unknown.
 
-### File Access Errors
-- File size/mtime: Stored as NULL if inaccessible
-- Content hash: NULL if hashing fails
-- Indexed timestamp: Still updated to show attempted access
+#### Scenario: Saved facts are returned for a known path
 
-### Database Constraints
-- All new columns follow existing nullable pattern
-- `indexed_at` has default to ensure always populated
-- No foreign key constraints affected by changes
+- **WHEN** a caller asks for file facts at the absolute path of a book whose facts were
+  saved
+- **THEN** the stored size and modification time are returned without changing the
+  record
+
+#### Scenario: An unindexed path has no saved facts
+
+- **WHEN** a caller asks for file facts at a path with no book record
+- **THEN** the operation reports that no matching record exists

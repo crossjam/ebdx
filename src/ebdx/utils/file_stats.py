@@ -1,8 +1,8 @@
 """File statistics utilities for ebdx."""
 
 import hashlib
-import os
-from datetime import datetime, timezone
+from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
@@ -33,17 +33,16 @@ def get_file_stats(file_path: Path) -> FileStats:
         # Get file size and modification time
         stat_result = file_path.stat()
         size = stat_result.st_size
-        mtime = datetime.fromtimestamp(stat_result.st_mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        mtime = (
+            datetime.fromtimestamp(stat_result.st_mtime, tz=UTC).isoformat().replace("+00:00", "Z")
+        )
     except OSError:
         # File access failed, leave size and mtime as None
         pass
 
-    try:
-        # Compute SHA-256 hash of file contents
+    # Compute SHA-256 hash of file contents when possible.
+    with suppress(OSError):
         content_hash = _compute_sha256(file_path)
-    except OSError:
-        # Hashing failed, leave content_hash as None
-        pass
 
     return FileStats(size=size, mtime=mtime, content_hash=content_hash)
 

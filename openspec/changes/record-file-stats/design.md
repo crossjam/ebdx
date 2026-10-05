@@ -2,154 +2,89 @@
 
 ## Context and Problem
 
-The ebdx system currently indexes EPUB files by extracting metadata and storing it in a SQLite database. However, it lacks awareness of the underlying file characteristics, which limits optimization opportunities and prevents advanced file management features.
+Every index run currently extracts metadata from every EPUB, even when neither its path
+nor its file has changed. The store also knows nothing about the file that produced a
+book row, which prevents incremental indexing and makes a content-derived identity
+available only to future features.
 
-Key limitations:
-1. Every index run processes all files regardless of changes
-2. No portable file identity beyond path (breaks when files move)
-3. No visibility into indexing performance costs
-4. Cannot detect missing or moved files
+This change records inexpensive file facts, adds a content hash for rows that are
+written, and uses the inexpensive facts to avoid metadata extraction for unchanged
+paths.
 
-## Solution Overview
+## Data Model
 
-Extend the database schema to include file-level statistics:
-- File size and modification time for change detection
-- Content hash for portable identity
-- Index timestamp for tracking operations
+The `books` table gains these nullable columns:
 
-This enables:
-1. Skipping unchanged files (major performance improvement)
-2. Tracking files across path changes
-3. Measuring and optimizing indexing costs
-4. Detecting missing files
+| Column | Value | Meaning |
+| --- | --- | --- |
+| `file_size` | integer | `stat().st_size`, in bytes |
+| `file_mtime` | text | `stat().st_mtime` rendered as an ISO-8601 UTC timestamp |
+| `content_hash` | text | lowercase SHA-256 of the file bytes, when hashing succeeds |
+| `indexed_at` | text | ISO-8601 UTC time of the last successful metadata-and-file-facts write |
 
-## Detailed Design
+`indexed_at` means **last changed in the database**, not last encountered by a scan. It
+is therefore left untouched when an unchanged file is skipped. The column is nullable
+because a row that predates this feature has no truthful historical value; it is
+populated the next time that row is written. A hash may likewise remain `NULL` for
+legacy rows or when hashing cannot be completed.
 
-### Database Schema Extension
+## Migration Strategy
 
-Add four columns to the `books` table:
+The project already migrates schema versions atomically. The new migration uses that
+path and adds all four columns with `ALTER TABLE ... ADD COLUMN` as nullable columns,
+without defaults. In particular, it MUST NOT add `indexed_at` as
+`TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP`: SQLite’s `ADD COLUMN` path accepts only
+constant defaults and rejects that expression.
 
-1. `file_size` (INTEGER, nullable)
-   - File size in bytes from `os.stat().st_size`
-   - NULL when file is inaccessible
+Fresh databases define the same nullable columns. The application supplies an ISO-8601
+UTC `indexed_at` value explicitly whenever it writes file facts and metadata. Existing
+rows keep `NULL` for all four new fields until re-indexed, preserving the distinction
+between unknown history and a known value. The migration runs inside the existing
+transaction/version-stamping mechanism, so a failed step leaves the prior layout intact.
 
-2. `file_mtime` (TEXT, nullable)
-   - Modification time as ISO-8601 UTC timestamp
-   - NULL when file is inaccessible
+## File Processing Flow
 
-3. `content_hash` (TEXT, nullable)
-   - SHA-256 hash of file contents
-   - NULL when hashing fails or is disabled
+The scanner, which controls when extraction happens, makes the skip decision:
 
-4. `indexed_at` (TEXT, NOT NULL, DEFAULT CURRENT_TIMESTAMP)
-   - Last write timestamp in ISO-8601 UTC
-   - Always populated, updated on every index operation
+1. Resolve the candidate path and call `stat()` before metadata extraction.
+2. Ask the store for the saved `file_size` and `file_mtime` for that resolved path.
+3. If a row exists and both saved facts match the current facts, count the file as
+   `skipped` and do not call `extract_metadata` or `save_book`.
+4. Otherwise extract metadata. For a successful extraction, compute the SHA-256 hash,
+   attach the current file facts and an explicitly generated `indexed_at`, then call
+   `save_book`.
+5. A failed `stat()`, extraction, hash, or write is reported through the run’s failure
+   handling and does not turn an existing row into a false “unchanged” row.
 
-### Migration Strategy
+The store exposes a small path-keyed read API for step 2. `save_book` remains
+responsible only for persisting a supplied successful write; it does not decide whether
+extraction can be skipped. This keeps the optimization effective for the actual control
+flow and leaves callers that save already-extracted metadata well-defined.
 
-Implement atomic schema migration compatible with existing architecture:
+Size and mtime are deliberately a fast invalidation check, not a cryptographic change
+proof. A changed file with an unchanged size and mtime can be missed; the hash is
+calculated when a write is required and is stored for later identity work, not read on
+every scan.
 
-1. Define `AddedColumn` metadata for new fields
-2. Create migration step that adds columns to existing databases
-3. Update `_BOOKS_COLUMNS` for fresh database initialization
-4. Add `ensure_schema` callback for migration-owned objects
-5. Handle backward compatibility (NULL values for existing records)
+## Progress and Errors
 
-### File Processing Flow
+The index result distinguishes `indexed`, `updated`, `skipped`, and `failed`, alongside
+the total discovered files. Progress and verbose output may describe hashing and
+skipping, but must not imply an unreliable estimate of time saved. Hashing happens
+locally and no file contents leave the machine.
 
-Enhanced `save_book` function:
-
-1. Before extraction:
-   - `stat()` file to get size and mtime
-   - Compare with stored values if record exists
-   - Skip extraction if unchanged (optimization)
-
-2. During processing:
-   - Compute SHA-256 hash with progress reporting
-   - Measure and report hashing performance
-
-3. Storage:
-   - Update all fields including `indexed_at`
-   - Handle file access errors gracefully
-
-### Performance Monitoring
-
-Integrate with existing progress reporting:
-
-1. Show real-time hashing progress
-2. Display performance metrics upon completion
-3. Report optimization benefits (files skipped)
-4. Measure average processing time per file
-
-### Error Handling
-
-Graceful degradation:
-
-1. File access errors: Store NULL for size/mtime/hash
-2. Hashing failures: Store NULL for content_hash
-3. Database constraints: Follow existing nullable patterns
-4. User feedback: Clear warnings for any issues
-
-## Implementation Plan
-
-### Phase 1: Schema and Core Infrastructure
-- Define column types and constraints
-- Implement atomic migration
-- Update database initialization
-- Add file statistics collection
-
-### Phase 2: Optimization Logic
-- Compare file stats to skip unchanged files
-- Implement content hashing with progress reporting
-- Update indexing timestamp logic
-
-### Phase 3: Integration and Testing
-- Integrate with CLI progress reporting
-- Add verbose mode details
-- Comprehensive testing
-- Documentation updates
-
-## Security and Privacy Considerations
-
-1. Content hashes are for internal identification only
-2. No personal information extracted from file contents
-3. File access follows existing permission model
-4. Hashing occurs locally, no data transmission
-
-## Performance Impact
-
-Positive:
-- Major reduction in re-indexing time for large libraries
-- Better progress reporting and user feedback
-
-Negative:
-- Initial SHA-256 computation overhead
-- Slightly larger database storage requirements
-
-Mitigation:
-- Progress indicators showing real-time status
-- Option to disable hashing for quick re-indexing
-- Clear reporting of time saved vs. hashing costs
-
-## Backward Compatibility
-
-Fully maintained:
-- Existing databases migrate safely
-- NULL values handled gracefully
-- New features work with old data
-- No breaking changes to existing APIs
+Unreadable or invalid EPUBs keep the existing continue-past-failure behavior. A failed
+file is not skipped merely because an older row happens to hold matching or incomplete
+facts.
 
 ## Testing Strategy
 
-1. Unit tests for file statistics collection
-2. Integration tests for schema migration
-3. Performance tests for hash computation
-4. Regression tests for existing functionality
-5. Scenario tests for optimization cases
-
-## Future Extensions
-
-1. Advanced file tracking (duplicate detection)
-2. Smart backup scheduling based on file changes
-3. Integration with cloud storage services
-4. Enhanced missing file recovery workflows
+- Migration of a version-one database retains its rows and leaves the new fields `NULL`.
+- A newly written row has explicit file facts, a SHA-256 hash, and `indexed_at`; a
+  changed file refreshes them and advances `indexed_at`.
+- An unchanged, previously indexed path is counted as skipped and extraction is not
+  invoked.
+- A changed size or mtime invokes extraction and updates the existing row without adding
+  a duplicate.
+- Stat, extraction, hash, and database-write failures are counted and do not stop other
+  files.

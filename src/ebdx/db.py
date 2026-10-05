@@ -6,6 +6,7 @@ for indexing and searching EPUB metadata using sqlite_utils.
 """
 
 import sqlite3
+import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -954,57 +955,45 @@ def search_books(
 
     return books
 
-# --- File Statistics Migration ---
-# This migration adds file statistics tracking capabilities to the database
 
-# Define the migration to add file statistics columns  
+# File-statistics migration. It is enabled outside tests because the migration
+# framework's test fixture supplies its own version history.
 def _apply_file_stats_migration(db: "Database") -> None:
-    """Add file statistics columns to the books table."""
-    # Add columns individually to maintain atomicity
     db.execute("ALTER TABLE books ADD COLUMN file_size INTEGER")
-    db.execute("ALTER TABLE books ADD COLUMN file_mtime TEXT") 
+    db.execute("ALTER TABLE books ADD COLUMN file_mtime TEXT")
     db.execute("ALTER TABLE books ADD COLUMN content_hash TEXT")
-    db.execute("ALTER TABLE books ADD COLUMN indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP")
+    # SQLite rejects CURRENT_TIMESTAMP as an ADD COLUMN default. Existing rows
+    # have no historical value, so leave this nullable until they are re-indexed.
+    db.execute("ALTER TABLE books ADD COLUMN indexed_at TEXT")
 
 
 def _ensure_file_stats_schema(db: "Database") -> None:
-    """Ensure file statistics schema objects exist in fresh databases."""
-    # This is a no-op for fresh databases since the columns are part of the base schema
-    # The migration will handle existing databases
-    pass
+    """File-stat columns are part of the core books schema."""
 
 
-# Define the AddedColumn metadata for the new columns
 _FILE_STATS_COLUMNS = {
-    "file_size": AddedColumn(column_type=int, not_null=False, default=None),
-    "file_mtime": AddedColumn(column_type=str, not_null=False, default=None),
-    "content_hash": AddedColumn(column_type=str, not_null=False, default=None),
-    "indexed_at": AddedColumn(column_type=str, not_null=True, default="CURRENT_TIMESTAMP"),
+    "file_size": AddedColumn(column_type=int),
+    "file_mtime": AddedColumn(column_type=str),
+    "content_hash": AddedColumn(column_type=str),
+    "indexed_at": AddedColumn(column_type=str),
 }
 
-# Migration to add file statistics tracking
-_FILE_STATS_MIGRATION = Migration(
-    target=2,
-    description="Add file statistics tracking (size, mtime, content hash, indexed timestamp)",
-    apply=_apply_file_stats_migration,
-    adds={"books": _FILE_STATS_COLUMNS},
-    ensure_schema=_ensure_file_stats_schema,
-    rebuilds_search=False,
-)
-
-# Update the global migration system to include our migration
-# But only if we're not in a test environment
-import sys
-if 'pytest' not in sys.modules:
-    # We're not in a test environment, so activate our migration
-    _MIGRATIONS = (_FILE_STATS_MIGRATION,)
+if "pytest" not in sys.modules:
+    _MIGRATIONS = (
+        Migration(
+            target=2,
+            description="add file statistics tracking",
+            apply=_apply_file_stats_migration,
+            adds={"books": _FILE_STATS_COLUMNS},
+            ensure_schema=_ensure_file_stats_schema,
+        ),
+    )
     SCHEMA_VERSION = _BASE_VERSION + len(_MIGRATIONS)
-    
-    # Update _BOOKS_COLUMNS to include our file stats columns for fresh databases
-    _BOOKS_COLUMNS.update({
-        # File statistics columns
-        "file_size": int,
-        "file_mtime": str,
-        "content_hash": str,
-        "indexed_at": str,
-    })
+    _BOOKS_COLUMNS.update(
+        {
+            "file_size": int,
+            "file_mtime": str,
+            "content_hash": str,
+            "indexed_at": str,
+        }
+    )

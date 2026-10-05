@@ -2,52 +2,32 @@
 
 ## Problem Statement
 
-Currently, the ebdx database only stores metadata extracted from EPUB files. This approach lacks crucial file-level information that could enable significant optimizations and new features:
-
-1. **Inefficient Re-indexing**: Every index run processes all files regardless of whether they've changed
-2. **No File Identity**: Cannot track files across path changes or detect moved/deleted files
-3. **Missing Performance Metrics**: No insight into indexing costs or progress
+The indexer extracts every EPUB on every run and records no facts about the source file.
+That makes a large unchanged library unnecessarily expensive to re-index and leaves
+future file-identity work without a persisted digest.
 
 ## Proposed Solution
 
-Add four new columns to the `books` table to capture essential file statistics:
+Add nullable `file_size`, `file_mtime`, `content_hash`, and `indexed_at` fields to
+`books`. The scanner will compare size and modification time with the saved facts before
+extraction; only a matching, fully known pair skips the file. Changed or previously
+untracked files are extracted, hashed, and saved with an application-generated UTC
+`indexed_at` timestamp.
 
-- `file_size` (bytes)
-- `file_mtime` (ISO-8601 UTC timestamp from `stat`)
-- `content_hash` (SHA-256 of file bytes)
-- `indexed_at` (ISO-8601 UTC timestamp of last index operation)
+`indexed_at` means the last successful database write, not the last scan encounter, so
+skipping does not change it. The digest is recorded when a write is needed; it is not
+read on every scan and is therefore not the change detector for this feature.
 
-These fields will enable three major improvements:
+## Migration
 
-### 1. Skip Unchanged Files
-When `file_size` and `file_mtime` match stored values, skip expensive extraction entirely - the biggest performance win for large libraries.
+The schema version will advance through the existing atomic in-place migration system.
+Its SQLite `ADD COLUMN` statements use nullable columns with no expression defaults. In
+particular, `CURRENT_TIMESTAMP` cannot be a default in this migration path. Existing
+rows retain `NULL` file facts and are refreshed naturally when re-indexed; new
+application writes set `indexed_at` explicitly.
 
-### 2. Portable File Identity
-The `content_hash` identifies books independently of their path, enabling detection of moved files and robust handling of missing files.
+## Scope
 
-### 3. Missing File Detection
-A stale `indexed_at` after a full run, or a failed `stat`, marks files as gone; the hash can recognize moved files.
-
-## Implementation Plan
-
-1. **Schema Migration**: Add the new columns via atomic migration
-2. **Data Collection**: Implement file statistics gathering during indexing
-3. **Optimization Logic**: Add logic to skip unchanged files when possible
-4. **Hash Computation**: Calculate SHA-256 hashes with progress reporting
-5. **Index Timestamping**: Record when each book was last processed
-
-## Backward Compatibility
-
-Adding columns requires bumping `SCHEMA_VERSION`. The `_ensure_schema` function currently handles older versions by dropping everything and rebuilding. For existing libraries (1,904 books locally), this means the database would be emptied until re-indexed. 
-
-Options:
-- Accept the rebuild and document it in release notes
-- Implement in-place migration first (preferred)
-
-## Testing Requirements
-
-- Fields populated on insert
-- `indexed_at` advances on re-index
-- Changed files update size/mtime/hash
-- Unchanged files are skipped (when implemented)
-- Progress reporting for hash computation shows cost measurement
+This change records the file facts and supports fast path-keyed incremental indexing. It
+does not yet use the hash to merge moved or duplicate files, or mark missing files.
+Those are later features that can build on these recorded facts.

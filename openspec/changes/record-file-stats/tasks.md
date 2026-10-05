@@ -1,40 +1,33 @@
 # Implementation Tasks
 
-## 1. Schema Design and Migration
-- [ ] Define new column types and constraints
-- [ ] Create migration script to add columns to existing databases
-- [ ] Update `_BOOKS_COLUMNS` mapping with new fields
-- [ ] Add `AddedColumn` definitions for migration compatibility
-- [ ] Implement `ensure_schema` callback for fresh databases
+## 1. Schema and Store
 
-## 2. File Statistics Collection
-- [ ] Add `stat()` call to get file size and modification time
-- [ ] Implement SHA-256 hashing with progress reporting
-- [ ] Add timing measurements for hash computation
-- [ ] Integrate file stats into `save_book` function
-- [ ] Handle file access errors gracefully
+- [ ] Add nullable `file_size`, `file_mtime`, `content_hash`, and `indexed_at` to the
+  current `books` schema map.
+- [ ] Add an atomic migration that uses SQLite-compatible `ADD COLUMN` statements with
+  no non-constant defaults; do not use `DEFAULT CURRENT_TIMESTAMP`.
+- [ ] Keep migrated rows’ new values `NULL` until they are written again.
+- [ ] Add a path-keyed store read API for saved size and modification time.
+- [ ] Make successful `save_book` writes persist supplied file facts and an explicitly
+  generated ISO-8601 UTC `indexed_at` value.
 
-## 3. Optimization Logic
-- [ ] Compare stored vs. current file stats to detect changes
-- [ ] Skip extraction when file hasn't changed
-- [ ] Update `indexed_at` timestamp on every index operation
-- [ ] Add command-line option to force re-indexing
+## 2. Scanner Flow
 
-## 4. Database Integration
-- [ ] Modify `save_book` to store new fields
-- [ ] Update search functionality to handle new schema
-- [ ] Add database queries for file-based operations
-- [ ] Implement missing file detection logic
+- [ ] Resolve and `stat()` each candidate before calling `extract_metadata`.
+- [ ] Look up saved file facts and skip extraction and storage only when both non-null
+  saved facts match the current facts.
+- [ ] For a non-skipped file, extract metadata, hash its bytes, and pass all file facts
+  to the store write.
+- [ ] Keep stat, extraction, hash, and write failures distinct from an unchanged-file
+  skip and continue processing the rest of the library.
 
-## 5. Testing
-- [ ] Unit tests for file statistics collection
-- [ ] Integration tests for schema migration
-- [ ] Performance tests for hash computation
-- [ ] Regression tests for existing functionality
-- [ ] Test optimization scenarios (skip unchanged files)
+## 3. Reporting and Tests
 
-## 6. Documentation
-- [ ] Update README with new features
-- [ ] Document schema changes
-- [ ] Explain performance implications
-- [ ] Provide migration guidance for users
+- [ ] Include `skipped` alongside total, indexed, updated, and failed in index results.
+- [ ] Test migration from the preceding version, including `NULL` legacy facts and rows
+  retained.
+- [ ] Test explicit timestamps and refreshed facts on a changed file.
+- [ ] Test that an unchanged second run does not call metadata extraction or update
+  `indexed_at`.
+- [ ] Test that changed, unreadable, and hash-failing files are respectively updated or
+  failed without stopping other files.
