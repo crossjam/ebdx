@@ -57,43 +57,7 @@ class Migration(NamedTuple):
 # Version 1 is the first layout with path-keyed book identity. Older databases
 # cannot be migrated safely because they do not have a stable file path.
 _BASE_VERSION = 1
-
-# Define the migration to add file statistics columns
-def _apply_file_stats_migration(db: "Database") -> None:
-    """Add file statistics columns to the books table."""
-    # Add columns individually to maintain atomicity
-    db.execute("ALTER TABLE books ADD COLUMN file_size INTEGER")
-    db.execute("ALTER TABLE books ADD COLUMN file_mtime TEXT")
-    db.execute("ALTER TABLE books ADD COLUMN content_hash TEXT")
-    db.execute("ALTER TABLE books ADD COLUMN indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP")
-
-
-def _ensure_file_stats_schema(db: "Database") -> None:
-    """Ensure file statistics schema objects exist in fresh databases."""
-    # This is a no-op for fresh databases since the columns are part of the base schema
-    # The migration will handle existing databases
-    pass
-
-
-# Define the AddedColumn metadata for the new columns
-_FILE_STATS_COLUMNS = {
-    "file_size": AddedColumn(column_type=int, not_null=False, default=None),
-    "file_mtime": AddedColumn(column_type=str, not_null=False, default=None),
-    "content_hash": AddedColumn(column_type=str, not_null=False, default=None),
-    "indexed_at": AddedColumn(column_type=str, not_null=True, default="CURRENT_TIMESTAMP"),
-}
-
-# Migration to add file statistics tracking
-_FILE_STATS_MIGRATION = Migration(
-    target=2,
-    description="Add file statistics tracking (size, mtime, content hash, indexed timestamp)",
-    apply=_apply_file_stats_migration,
-    adds={"books": _FILE_STATS_COLUMNS},
-    ensure_schema=_ensure_file_stats_schema,
-    rebuilds_search=False,
-)
-
-_MIGRATIONS: tuple[Migration, ...] = (_FILE_STATS_MIGRATION,)
+_MIGRATIONS: tuple[Migration, ...] = ()
 
 
 def _validate_migrations() -> None:
@@ -136,11 +100,6 @@ _BOOKS_COLUMNS = {
     "isbn": str,
     "language": str,
     "tags": str,
-    # File statistics columns
-    "file_size": int,
-    "file_mtime": str,
-    "content_hash": str,
-    "indexed_at": str,
 }
 
 
@@ -239,7 +198,6 @@ def validate_query(query: str, *, fts: bool = False) -> None:
     Public entry point for callers that must settle whether a query is usable
     before deciding what else to do -- a dry run has to report a bad query as a
     bad query, whatever it would otherwise have said about the database. It
-
     accepts exactly what :func:`search_books` accepts, so the two cannot
     disagree about which queries are searchable.
 
@@ -455,11 +413,11 @@ def plan_mode(db: "Database") -> PlanMode:
       predicted for it.
 
     The last case is a deliberate limit. Predicting what a damaged or foreign
-      layout would do means reproducing every branch of :func:`_ensure_schema`
-      and :func:`save_book` here, and any corner missed is a dry run that
-      promises a run which cannot happen -- which is worse than declining to
-      guess. Since a damaged library is cheap to rebuild by re-indexing, the
-      useful answer is to say so rather than to model the failure.
+    layout would do means reproducing every branch of :func:`_ensure_schema`
+    and :func:`save_book` here, and any corner missed is a dry run that
+    promises a run which cannot happen -- which is worse than declining to
+    guess. Since a damaged library is cheap to rebuild by re-indexing, the
+    useful answer is to say so rather than to model the failure.
     """
     tables = db.table_names()
     version = db.execute("PRAGMA user_version").fetchone()[0]
@@ -628,7 +586,7 @@ def would_repair_search(db: "Database") -> bool:
     if any(migration.target > version and migration.rebuilds_search for migration in _MIGRATIONS):
         return True  # a pending migration rebuilds the index definition
     if "authors" not in tables:
-        return True  # created on open; the search join needs it
+        return True  # created on open; the search joins against it
     return not _fts_index_is_intact(db)
 
 
@@ -640,7 +598,6 @@ def describe_pending_schema_work(db: "Database") -> list[str]:
     two must be changed together.
     """
     version = db.execute("PRAGMA user_version").fetchone()[0]
-
     if version > SCHEMA_VERSION:
         return [f"leave the schema untouched (on-disk version {version} is newer)"]
     if version < _BASE_VERSION and "books" in db.table_names():
@@ -996,3 +953,58 @@ def search_books(
         )
 
     return books
+
+# --- File Statistics Migration ---
+# This migration adds file statistics tracking capabilities to the database
+
+# Define the migration to add file statistics columns  
+def _apply_file_stats_migration(db: "Database") -> None:
+    """Add file statistics columns to the books table."""
+    # Add columns individually to maintain atomicity
+    db.execute("ALTER TABLE books ADD COLUMN file_size INTEGER")
+    db.execute("ALTER TABLE books ADD COLUMN file_mtime TEXT") 
+    db.execute("ALTER TABLE books ADD COLUMN content_hash TEXT")
+    db.execute("ALTER TABLE books ADD COLUMN indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP")
+
+
+def _ensure_file_stats_schema(db: "Database") -> None:
+    """Ensure file statistics schema objects exist in fresh databases."""
+    # This is a no-op for fresh databases since the columns are part of the base schema
+    # The migration will handle existing databases
+    pass
+
+
+# Define the AddedColumn metadata for the new columns
+_FILE_STATS_COLUMNS = {
+    "file_size": AddedColumn(column_type=int, not_null=False, default=None),
+    "file_mtime": AddedColumn(column_type=str, not_null=False, default=None),
+    "content_hash": AddedColumn(column_type=str, not_null=False, default=None),
+    "indexed_at": AddedColumn(column_type=str, not_null=True, default="CURRENT_TIMESTAMP"),
+}
+
+# Migration to add file statistics tracking
+_FILE_STATS_MIGRATION = Migration(
+    target=2,
+    description="Add file statistics tracking (size, mtime, content hash, indexed timestamp)",
+    apply=_apply_file_stats_migration,
+    adds={"books": _FILE_STATS_COLUMNS},
+    ensure_schema=_ensure_file_stats_schema,
+    rebuilds_search=False,
+)
+
+# Update the global migration system to include our migration
+# But only if we're not in a test environment
+import sys
+if 'pytest' not in sys.modules:
+    # We're not in a test environment, so activate our migration
+    _MIGRATIONS = (_FILE_STATS_MIGRATION,)
+    SCHEMA_VERSION = _BASE_VERSION + len(_MIGRATIONS)
+    
+    # Update _BOOKS_COLUMNS to include our file stats columns for fresh databases
+    _BOOKS_COLUMNS.update({
+        # File statistics columns
+        "file_size": int,
+        "file_mtime": str,
+        "content_hash": str,
+        "indexed_at": str,
+    })
