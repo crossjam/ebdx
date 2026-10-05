@@ -153,6 +153,29 @@ def diagnostic_terminal(monkeypatch) -> io.StringIO:
     return buf
 
 
+@pytest.fixture
+def with_migrations(monkeypatch):
+    """Patch ebdx.db with test-only migrations and their resulting layout."""
+
+    def configure(*steps, adds_to_current=None, fts_columns=None):
+        from ebdx import db
+
+        books = dict(db._BOOKS_COLUMNS)
+        authors = dict(db._AUTHORS_COLUMNS)
+        current_columns = {"books": books, "authors": authors}
+        for table, columns in (adds_to_current or {}).items():
+            current_columns[table].update(columns)
+
+        monkeypatch.setattr(db, "_MIGRATIONS", tuple(steps))
+        monkeypatch.setattr(db, "SCHEMA_VERSION", db._BASE_VERSION + len(steps))
+        monkeypatch.setattr(db, "_BOOKS_COLUMNS", books)
+        monkeypatch.setattr(db, "_AUTHORS_COLUMNS", authors)
+        if fts_columns is not None:
+            monkeypatch.setattr(db, "_FTS_COLUMNS", tuple(fts_columns))
+
+    return configure
+
+
 def terminal_frames(captured: str) -> list[str]:
     """Split captured terminal output into the lines a screen would have shown.
 
