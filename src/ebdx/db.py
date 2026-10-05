@@ -6,6 +6,7 @@ for indexing and searching EPUB metadata using sqlite_utils.
 """
 
 import sqlite3
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -23,9 +24,41 @@ class InvalidQueryError(ValueError):
     """
 
 
-# Bumped whenever the on-disk layout changes incompatibly. Stored in the
-# database's ``PRAGMA user_version``; a file below this (with data) is rebuilt.
-SCHEMA_VERSION = 1
+class Migration(NamedTuple):
+    """One atomic schema upgrade, from the preceding version to ``target``.
+
+    Migration functions must use raw ``db.execute`` statements only. Helpers
+    such as sqlite-utils' ``add_column`` or ``Table.transform`` may commit the
+    enclosing transaction and break atomicity. A step that changes what the
+    full-text index reads must drop it with :func:`_drop_fts` and set
+    ``rebuilds_search=True`` so the next schema setup recreates and refills it.
+    """
+
+    target: int
+    description: str
+    apply: Callable[["Database"], None]
+    adds: Mapping[str, Mapping[str, type]]
+    rebuilds_search: bool = False
+
+
+# Version 1 is the first layout with path-keyed book identity. Older databases
+# cannot be migrated safely because they do not have a stable file path.
+_BASE_VERSION = 1
+_MIGRATIONS: tuple[Migration, ...] = ()
+
+
+def _validate_migrations() -> None:
+    expected = _BASE_VERSION + 1
+    for migration in _MIGRATIONS:
+        if migration.target != expected:
+            raise ValueError(
+                f"migration targets must be contiguous: expected {expected}, got {migration.target}"
+            )
+        expected += 1
+
+
+_validate_migrations()
+SCHEMA_VERSION = _BASE_VERSION + len(_MIGRATIONS)
 
 _FTS_TRIGGERS = ("books_ai", "books_ad", "books_au")
 
@@ -179,28 +212,28 @@ def get_database(db_path: str | Path, *, read_only: bool = False) -> "Database":
         return sqlite_utils.Database(conn)
 
     db = sqlite_utils.Database(str(db_path))
-    _ensure_schema(db)
+    try:
+        _ensure_schema(db)
+    except BaseException:
+        db.conn.close()
+        raise
     return db
 
 
 def _ensure_schema(db: "Database") -> None:
-    """Ensure the database schema exists and is current.
+    """Create, migrate, or repair the database schema as needed.
 
-    The layout version is recorded in ``PRAGMA user_version``. A database
-    written before path-keyed book identity (version below ``SCHEMA_VERSION``
-    but already carrying a ``books`` table) is rebuilt from scratch rather
-    than operated against; a database already at the current version keeps
-    all of its data, since every create below is ``IF NOT EXISTS``.
+    Layout versions are recorded in ``PRAGMA user_version``. Databases older
+    than path-keyed identity are rebuilt because their rows cannot be matched
+    safely to files. Known layouts at or above :data:`_BASE_VERSION` migrate
+    one step at a time; each step commits its schema changes and version stamp
+    atomically. A database at a newer version than this build understands is
+    left untouched.
 
-    A database stamped at the current version can still have a broken search
-    index, in either of two ways. A ``books_fts`` that is no longer an FTS5
-    table fails every search and every indexing write, and the ``IF NOT
-    EXISTS`` creates would step over it forever. A ``books_fts`` that is
-    simply gone is quieter and worse: the create puts back an empty
-    external-content table, and searches then report no matches for books
-    that are still sitting in ``books``. Either way the index is dropped,
-    recreated, and refilled from ``books``. The book rows are kept -- only
-    the derived index was broken, and it can be recomputed.
+    A missing or damaged full-text index is derived data: it is recreated and
+    refilled from ``books`` without discarding book rows. Migrations that
+    change the indexed content drop the index in their own transaction, so
+    this same repair path rebuilds it after the last pending step.
     """
     version = db.execute("PRAGMA user_version").fetchone()[0]
 
@@ -211,14 +244,18 @@ def _ensure_schema(db: "Database") -> None:
         )
         return
 
-    repairing_fts = False
-    if version < SCHEMA_VERSION and "books" in db.table_names():
+    tables = db.table_names()
+    if version < _BASE_VERSION and "books" in tables:
         logger.info(
-            f"Rebuilding database schema: on-disk version {version}, "
-            f"current version {SCHEMA_VERSION}"
+            f"Rebuilding database schema: on-disk version {version} predates "
+            f"migratable version {_BASE_VERSION}"
         )
         _drop_schema(db)
-    elif not _fts_index_is_intact(db):
+    elif _BASE_VERSION <= version < SCHEMA_VERSION and "books" in tables:
+        _apply_migrations(db, version)
+
+    repairing_fts = False
+    if not _fts_index_is_intact(db):
         # Warn only when there are books whose index is being rebuilt; on a
         # new database the index is simply absent and nothing was lost.
         if _stored_book_count(db):
@@ -234,8 +271,30 @@ def _ensure_schema(db: "Database") -> None:
     if repairing_fts:
         _repopulate_fts(db)
 
+    # New files, pre-path rebuilds, and empty/incomplete files can move
+    # directly to the current schema. Migrated databases were stamped inside
+    # each migration transaction; writing the final value again is harmless.
     if version < SCHEMA_VERSION:
         db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def _apply_migrations(db: "Database", version: int) -> None:
+    """Apply each migration after ``version``, committing each step atomically."""
+    for migration in _MIGRATIONS:
+        if migration.target <= version:
+            continue
+
+        # BEGIN IMMEDIATE obtains the writer lock before the first DDL change,
+        # so competing index runs fail before entering a partially applied step.
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            migration.apply(db)
+            db.execute(f"PRAGMA user_version = {migration.target}")
+            db.execute("COMMIT")
+        except BaseException:
+            if db.conn.in_transaction:
+                db.execute("ROLLBACK")
+            raise
 
 
 class UnindexableDatabaseError(RuntimeError):
@@ -259,11 +318,10 @@ def plan_mode(db: "Database") -> PlanMode:
 
     Three outcomes, and deliberately no more:
 
-    - ``compare``: the layout is the one this build writes, so existing rows
-      say which files would be updated.
-    - ``insert-all``: a real open rebuilds the schema from scratch -- recorded
-      below :data:`SCHEMA_VERSION`, or with no ``books`` table yet -- so every
-      readable file ends up inserted.
+    - ``compare``: the current layout, or a known earlier layout that will be
+      migrated in place, so existing rows say which files would be updated.
+    - ``insert-all``: a real open rebuilds a pre-path database or creates a
+      missing ``books`` table, so every readable file ends up inserted.
     - ``unusable``: the layout is not one this build recognises. No counts are
       predicted for it.
 
@@ -277,15 +335,15 @@ def plan_mode(db: "Database") -> PlanMode:
     tables = db.table_names()
     version = db.execute("PRAGMA user_version").fetchone()[0]
 
-    # Checked first: a real open drops and recreates this layout wholesale, so
-    # whatever shape it is in now does not matter.
-    if "books" in tables and version < SCHEMA_VERSION:
+    # Only versions predating path-keyed identity must be rebuilt. Their shape
+    # is irrelevant because no stored row can be safely carried forward.
+    if "books" in tables and version < _BASE_VERSION:
         return PlanMode(
             "insert-all",
             f"the schema would be rebuilt from scratch (on-disk version {version})",
         )
 
-    missing = _missing_schema_columns(db)
+    missing = _missing_schema_columns(db, version)
     if missing:
         described = " and ".join(
             f"the {table} table is missing {', '.join(repr(c) for c in columns)}"
@@ -341,13 +399,29 @@ def _missing_triggers(db: "Database") -> list[str]:
     return [name for name in _FTS_TRIGGERS if name not in existing]
 
 
-def _missing_schema_columns(db: "Database") -> dict[str, list[str]]:
-    """Columns the books and authors tables need but do not have, by table.
+def _expected_columns_at_version(version: int) -> dict[str, dict[str, type]]:
+    """Return the books/authors columns defined by an on-disk version."""
+    expected = {"books": dict(_BOOKS_COLUMNS), "authors": dict(_AUTHORS_COLUMNS)}
+    for migration in _MIGRATIONS:
+        if migration.target <= version:
+            continue
+        for table, columns in migration.adds.items():
+            if table in expected:
+                for column in columns:
+                    expected[table].pop(column, None)
+    return expected
 
-    An absent table is not missing columns: a real open creates it whole.
+
+def _missing_schema_columns(db: "Database", version: int | None = None) -> dict[str, list[str]]:
+    """Columns expected at ``version`` but absent, by table.
+
+    An absent table is not missing columns: a real open creates it whole. When
+    ``version`` is omitted, inspect the version recorded in the database.
     """
+    if version is None:
+        version = db.execute("PRAGMA user_version").fetchone()[0]
     missing = {}
-    for table, expected in (("books", _BOOKS_COLUMNS), ("authors", _AUTHORS_COLUMNS)):
+    for table, expected in _expected_columns_at_version(version).items():
         if table not in db.table_names():
             continue
         present = set(db[table].columns_dict)
@@ -365,9 +439,12 @@ def unrecognised_structure(db: "Database") -> str | None:
     newer version with the expected structure is left alone by a real open and
     still reads correctly, so reading commands may use it.
     """
-    missing = _missing_schema_columns(db)
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    if version < _BASE_VERSION and "books" in db.table_names():
+        return None  # a real open rebuilds this known pre-path layout
+
+    missing = _missing_schema_columns(db, version)
     if missing:
-        version = db.execute("PRAGMA user_version").fetchone()[0]
         described = " and ".join(
             f"the {table} table is missing {', '.join(repr(c) for c in columns)}"
             for table, columns in missing.items()
@@ -394,13 +471,13 @@ def would_fail_to_open(db: "Database") -> bool:
 
 
 def would_discard_existing_rows(db: "Database") -> bool:
-    """Whether a real open rebuilds the schema from scratch, dropping every row.
+    """Whether a real open rebuilds a pre-path schema and drops its rows.
 
-    A search run against such a database reads rows that a real search would
-    never see, so its results would be stale rather than merely early.
+    Migratable older versions retain their rows, so a dry-run search can read
+    them even while it reports the pending migrations.
     """
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    return version < SCHEMA_VERSION and "books" in db.table_names()
+    return version < _BASE_VERSION and "books" in db.table_names()
 
 
 def would_repair_search(db: "Database") -> bool:
@@ -417,8 +494,10 @@ def would_repair_search(db: "Database") -> bool:
     tables = db.table_names()
     if "books" not in tables:
         return True  # the whole schema, index included, is created
-    if version < SCHEMA_VERSION:
+    if version < _BASE_VERSION:
         return True  # rebuilt from scratch
+    if any(migration.target > version and migration.rebuilds_search for migration in _MIGRATIONS):
+        return True  # a pending migration rebuilds the index definition
     if "authors" not in tables:
         return True  # created on open; the search joins against it
     return not _fts_index_is_intact(db)
@@ -434,7 +513,7 @@ def describe_pending_schema_work(db: "Database") -> list[str]:
     version = db.execute("PRAGMA user_version").fetchone()[0]
     if version > SCHEMA_VERSION:
         return [f"leave the schema untouched (on-disk version {version} is newer)"]
-    if version < SCHEMA_VERSION and "books" in db.table_names():
+    if version < _BASE_VERSION and "books" in db.table_names():
         return [
             f"rebuild the schema from scratch (on-disk version {version}, "
             f"current version {SCHEMA_VERSION}), discarding existing rows"
@@ -443,7 +522,11 @@ def describe_pending_schema_work(db: "Database") -> list[str]:
     if "books" not in tables:
         return ["create the books, authors, and full-text schema"]
 
-    work = []
+    work = [
+        f"apply migration to version {migration.target}: {migration.description}"
+        for migration in _MIGRATIONS
+        if migration.target > version
+    ]
     if "authors" not in tables:
         # Created on open like any other managed table; the search join needs it.
         work.append("create the authors table")
@@ -488,20 +571,35 @@ def _stored_book_count(db: "Database") -> int:
     return db.execute("SELECT count(*) FROM books").fetchone()[0]
 
 
+def _quote_identifier(identifier: str) -> str:
+    """Quote an internal SQL identifier."""
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _fts_value(column: str, row: str) -> str:
+    """Expression supplying one FTS value from an aliased book row."""
+    if column == "author":
+        return f"(SELECT name FROM authors WHERE id = {row}.author_id)"
+    return f"{row}.{_quote_identifier(column)}"
+
+
+def _fts_column_list() -> str:
+    return ", ".join(_quote_identifier(column) for column in _FTS_COLUMNS)
+
+
 def _repopulate_fts(db: "Database") -> None:
     """Refill ``books_fts`` from ``books`` after the index was rebuilt.
 
     FTS5's own ``'rebuild'`` command is not usable here: it reads the
     ``content=`` table directly, and ``books`` stores ``author_id`` rather
-    than the ``author`` text the index carries. This mirrors what the insert
-    trigger does, for every existing row.
+    than the ``author`` text the index carries. The same value expressions as
+    the triggers are selected here for every existing row.
     """
+    values = ", ".join(_fts_value(column, "b") for column in _FTS_COLUMNS)
     db.execute(
-        """
-        INSERT INTO books_fts (rowid, title, author, series, tags)
-        SELECT b.id, b.title,
-               (SELECT name FROM authors WHERE id = b.author_id),
-               b.series, b.tags
+        f"""
+        INSERT INTO books_fts (rowid, {_fts_column_list()})
+        SELECT b.id, {values}
         FROM books b
         """
     )
@@ -557,40 +655,38 @@ def _create_schema(db: "Database") -> None:
         """
     )
 
-    # Triggers to keep FTS5 index in sync
+    # Triggers to keep FTS5 in sync. Values are generated from the same column
+    # list as the table and the refill query, so a migration can extend the
+    # indexed columns without leaving any of those paths out of step.
+    columns = _fts_column_list()
+    new_values = ", ".join(_fts_value(column, "new") for column in _FTS_COLUMNS)
+    old_values = ", ".join(_fts_value(column, "old") for column in _FTS_COLUMNS)
+
     db.execute(
-        """
+        f"""
         CREATE TRIGGER IF NOT EXISTS books_ai AFTER INSERT ON books BEGIN
-            INSERT INTO books_fts (rowid, title, author, series, tags)
-            SELECT new.id, new.title,
-                   (SELECT name FROM authors WHERE id = new.author_id),
-                   new.series, new.tags;
+            INSERT INTO books_fts (rowid, {columns})
+            SELECT new.id, {new_values};
         END
         """
     )
 
     db.execute(
-        """
+        f"""
         CREATE TRIGGER IF NOT EXISTS books_ad AFTER DELETE ON books BEGIN
-            INSERT INTO books_fts (books_fts, rowid, title, author, series, tags)
-            VALUES ('delete', old.id, old.title,
-                    (SELECT name FROM authors WHERE id = old.author_id),
-                    old.series, old.tags);
+            INSERT INTO books_fts (books_fts, rowid, {columns})
+            VALUES ('delete', old.id, {old_values});
         END
         """
     )
 
     db.execute(
-        """
+        f"""
         CREATE TRIGGER IF NOT EXISTS books_au AFTER UPDATE ON books BEGIN
-            INSERT INTO books_fts (books_fts, rowid, title, author, series, tags)
-            VALUES ('delete', old.id, old.title,
-                    (SELECT name FROM authors WHERE id = old.author_id),
-                    old.series, old.tags);
-            INSERT INTO books_fts (rowid, title, author, series, tags)
-            SELECT new.id, new.title,
-                   (SELECT name FROM authors WHERE id = new.author_id),
-                   new.series, new.tags;
+            INSERT INTO books_fts (books_fts, rowid, {columns})
+            VALUES ('delete', old.id, {old_values});
+            INSERT INTO books_fts (rowid, {columns})
+            SELECT new.id, {new_values};
         END
         """
     )
@@ -648,6 +744,11 @@ def save_book(db: "Database", book_data: dict) -> SavedBook:
         "language": book_data.get("language", ""),
         "tags": book_data.get("tags", ""),
     }
+    # Keep future extracted columns flowing through the same path-keyed write
+    # logic once a schema migration adds them to the store.
+    for column in _BOOKS_COLUMNS:
+        if column not in fields and column != "id" and column in book_data:
+            fields[column] = book_data[column]
 
     books = db["books"]
     existing_id = next((row["id"] for row in books.rows_where("path = ?", [path])), None)
