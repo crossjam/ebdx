@@ -24,6 +24,14 @@ class InvalidQueryError(ValueError):
     """
 
 
+class AddedColumn(NamedTuple):
+    """Complete current-schema definition for a migration-added column."""
+
+    column_type: type
+    not_null: bool = False
+    default: str | int | float | bool | None = None
+
+
 class Migration(NamedTuple):
     """One atomic schema upgrade, from the preceding version to ``target``.
 
@@ -41,7 +49,7 @@ class Migration(NamedTuple):
     target: int
     description: str
     apply: Callable[["Database"], None]
-    adds: Mapping[str, Mapping[str, type]]
+    adds: Mapping[str, Mapping[str, AddedColumn]]
     ensure_schema: Callable[["Database"], None]
     rebuilds_search: bool = False
 
@@ -93,6 +101,24 @@ _BOOKS_COLUMNS = {
     "language": str,
     "tags": str,
 }
+
+
+def _validate_migration_columns() -> None:
+    """Ensure core added-column metadata matches the fresh schema maps."""
+    current = {"books": _BOOKS_COLUMNS, "authors": _AUTHORS_COLUMNS}
+    for migration in _MIGRATIONS:
+        for table, columns in migration.adds.items():
+            if table not in current:
+                continue
+            for name, definition in columns.items():
+                if current[table].get(name) is not definition.column_type:
+                    raise ValueError(
+                        f"migration {migration.target} adds {table}.{name}, but the current "
+                        "schema column map does not have its declared type"
+                    )
+
+
+_validate_migration_columns()
 
 
 def _validate_fts_query(query: str) -> None:
@@ -661,22 +687,45 @@ def _drop_schema(db: "Database") -> None:
     db["authors"].drop(ignore=True)
 
 
+def _core_column_options(
+    table: str, columns: Mapping[str, type], base_not_null: list[str]
+) -> tuple[list[str], dict[str, str | int | float | bool]]:
+    """Return nullability/default options declared by migration-added columns."""
+    not_null = list(base_not_null)
+    defaults = {}
+    for migration in _MIGRATIONS:
+        for name, definition in migration.adds.get(table, {}).items():
+            if name not in columns:
+                continue  # this older layout predates the added column
+            if columns[name] is not definition.column_type:
+                raise ValueError(f"current {table}.{name} type disagrees with migration metadata")
+            if definition.not_null and name not in not_null:
+                not_null.append(name)
+            if definition.default is not None:
+                defaults[name] = definition.default
+    return not_null, defaults
+
+
 def _create_core_tables(
     db: "Database",
     books_columns: Mapping[str, type],
     authors_columns: Mapping[str, type],
 ) -> None:
     """Create the core tables and path index for a specified layout version."""
+    authors_not_null, authors_defaults = _core_column_options("authors", authors_columns, ["name"])
+    books_not_null, books_defaults = _core_column_options("books", books_columns, ["title", "path"])
     db["authors"].create(
         dict(authors_columns),
         pk="id",
-        not_null=["name"],
+        not_null=authors_not_null,
+        defaults=authors_defaults,
         if_not_exists=True,
     )
     db["books"].create(
         dict(books_columns),
         pk="id",
-        not_null=["title", "path"],
+        not_null=books_not_null,
+        defaults=books_defaults,
         foreign_keys=["author_id"],
         if_not_exists=True,
     )

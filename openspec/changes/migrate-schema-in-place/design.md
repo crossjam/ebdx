@@ -38,13 +38,18 @@ earlier layout that has existed.
 ### Migrations are Python steps in an ordered tuple, declaring what they add
 
 ```python
+class AddedColumn(NamedTuple):
+    column_type: type
+    not_null: bool = False
+    default: object | None = None
+
 class Migration(NamedTuple):
-    target: int                             # the version this step produces
-    description: str                        # shown by --dry-run
-    apply: Callable[[Database], None]       # the versioned DDL and data changes
-    adds: Mapping[str, Mapping[str, type]]  # table -> {column: type} this step introduces
-    ensure_schema: Callable[[Database], None]  # idempotently creates step-owned objects
-    rebuilds_search: bool = False           # the step drops books_fts; see below
+    target: int                                      # the version this step produces
+    description: str                                 # shown by --dry-run
+    apply: Callable[[Database], None]                # the versioned DDL and data changes
+    adds: Mapping[str, Mapping[str, AddedColumn]]    # complete added-column definitions
+    ensure_schema: Callable[[Database], None]        # idempotently creates step-owned objects
+    rebuilds_search: bool = False                    # the step drops books_fts; see below
 
 _MIGRATIONS: tuple[Migration, ...] = ()
 ```
@@ -70,9 +75,11 @@ for a fresh file. If a migratable partial database has no `books` table, the cor
 first created in the layout expected at its recorded version, then the pending steps run;
 this prevents it from being stamped current while skipping required schema changes. The
 layout expected at version N is the current core layout minus every column a step with
-`target > N` adds. `_missing_schema_columns` takes the recorded version and checks against
-that. `plan_mode`, `unrecognised_structure` and `would_fail_to_open` inherit the fix. This is
-what stops the first added column from reporting every version-1 database as unusable.
+`target > N` adds. Each `AddedColumn` also declares nullability and a default; `_create_schema`
+uses those definitions when creating a fresh core table, so its DDL matches the migration's
+`ALTER TABLE` definition. `_missing_schema_columns` takes the recorded version and checks
+against that. `plan_mode`, `unrecognised_structure` and `would_fail_to_open` inherit the fix.
+This is what stops the first added column from reporting every version-1 database as unusable.
 
 *Alternative:* a frozen snapshot of each version's layout. It is explicit, but every step
 would have to restate the whole schema, and a snapshot that disagrees with the step it

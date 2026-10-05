@@ -19,8 +19,10 @@ from loguru import logger
 
 from ebdx import db as db_module
 from ebdx.cli import cli
-from ebdx.db import Migration
+from ebdx.db import AddedColumn, Migration
 from ebdx.scanner import iter_files
+
+_TEXT_COLUMN = AddedColumn(str, not_null=True, default="")
 
 
 @pytest.fixture(autouse=True)
@@ -745,7 +747,7 @@ def test_dry_run_index_predicts_migratable_layout_without_mutating_it(
         2,
         "add extra metadata",
         add_extra,
-        {"books": {"extra": str}},
+        {"books": {"extra": _TEXT_COLUMN}},
         ensure_nothing,
     )
     with_migrations(step, adds_to_current={"books": {"extra": str}})
@@ -799,7 +801,7 @@ def test_dry_run_search_and_schema_report_pending_migrations_read_only(
         2,
         "index extra search text",
         add_search_field,
-        {"books": {"extra_search": str}},
+        {"books": {"extra_search": _TEXT_COLUMN}},
         ensure_nothing,
         rebuilds_search=True,
     )

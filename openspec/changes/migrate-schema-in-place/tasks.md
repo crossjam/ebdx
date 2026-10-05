@@ -1,7 +1,7 @@
 ## 1. Migration model
 
-- [x] 1.1 Add the `Migration` NamedTuple, including an idempotent `ensure_schema` callback, an empty `_MIGRATIONS` tuple and `_BASE_VERSION = 1` to `src/ebdx/db.py`, derive `SCHEMA_VERSION` from them, and assert contiguous targets at import. Verify `SCHEMA_VERSION` is still 1 and the full suite passes unchanged.
-- [x] 1.2 Document the step-author rules in the `Migration` docstring: raw `db.execute` only, an idempotent `ensure_schema` callback for fresh/current schema objects, no sqlite-utils helpers that open their own transaction, and drop the index via `_drop_fts` plus `rebuilds_search=True` when a step changes what the index reads. Verify by review.
+- [x] 1.1 Add `AddedColumn` metadata for type, nullability and default, plus the `Migration` NamedTuple with an idempotent `ensure_schema` callback; add an empty `_MIGRATIONS` tuple and `_BASE_VERSION = 1`, derive `SCHEMA_VERSION` from them, and assert contiguous targets at import. Verify `SCHEMA_VERSION` is still 1 and the full suite passes unchanged.
+- [x] 1.2 Document the step-author rules in the `Migration` docstring: raw `db.execute` only, complete added-column metadata, an idempotent `ensure_schema` callback for fresh/current schema objects, no sqlite-utils helpers that open their own transaction, and drop the index via `_drop_fts` plus `rebuilds_search=True` when a step changes what the index reads. Verify by review.
 - [x] 1.3 Add a `with_migrations` fixture to `tests/conftest.py` that patches `_MIGRATIONS`, `SCHEMA_VERSION`, the current column maps and, when asked, `_FTS_COLUMNS` together. Verify with a smoke test that the patched version and layout are visible inside the test and restored after it.
 
 ## 2. Structural recognition per version
@@ -18,7 +18,7 @@
 - [x] 3.5 Verify the search-index path: a test step that adds an indexed column and drops `books_fts` leaves, after open, an index with the new column that returns every previously matching book and matches the new column once a book is re-saved with a value. Inject a refill failure after recreation and verify the repair rolls back so a later open retries it.
 - [x] 3.6 Verify added fields fill on re-index: after migrating, `ebdx index` over the same library populates the test step's column for every file, and before re-indexing it holds the empty default.
 - [x] 3.7 Verify a read-only open of a migratable database applies nothing: tables, columns, triggers and `user_version` are unchanged.
-- [x] 3.8 Verify migration-owned tables and indexes are created for fresh databases, and a migratable partial database without `books` gets its missing core tables at the recorded layout before its steps apply.
+- [x] 3.8 Verify fresh and migratable partial databases create migration-owned objects and match the added columns' nullability/defaults; a partial database without `books` gets its missing core tables at the recorded layout before its steps apply.
 
 ## 4. Dry-run prediction
 
@@ -31,4 +31,4 @@
 ## 5. Wrap-up
 
 - [x] 5.1 Update the `_ensure_schema`, `plan_mode` and `describe_pending_schema_work` docstrings and the `SCHEMA_VERSION` comment to describe migrate-versus-rebuild. Verify by review.
-- [ ] 5.2 Run `uv run pytest`, `uv run ruff check src tests` and `uv run ruff format --check src tests` and confirm all pass. Confirm `openspec validate migrate-schema-in-place --strict` passes.
+- [x] 5.2 Run `uv run pytest`, `uv run ruff check src tests` and `uv run ruff format --check src tests` and confirm all pass. Confirm `openspec validate migrate-schema-in-place --strict` passes.

@@ -21,10 +21,11 @@ library (kata d8dt).
 - **Each step is atomic.** A step's changes and its version stamp commit together or not at
   all. An interrupted or failing upgrade leaves the database at the last step that completed,
   never half-migrated, and a later open resumes from there.
-- **Fresh and partial schemas include migration-owned objects.** Each step declares an
-  idempotent schema-setup callback for tables and indexes outside the core column maps. Fresh
-  databases run those callbacks, and a migratable partial database missing `books` gets its
-  missing core tables at the recorded layout before pending steps run.
+- **Fresh and partial schemas include migration-owned objects.** Each step declares complete
+  added-column definitions (type, nullability, and default) and an idempotent schema-setup
+  callback for tables and indexes outside the core column maps. Fresh databases use matching
+  column constraints and run those callbacks; a migratable partial database missing `books`
+  gets its missing core tables at the recorded layout before pending steps run.
 - **The rebuild remains for layouts that cannot be migrated.** A database from before
   path-keyed identity (version 0 with a `books` table) is still rebuilt from scratch, and is
   still reported as such. A database recorded at a newer version than this build knows is

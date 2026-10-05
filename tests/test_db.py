@@ -21,6 +21,7 @@ from ebdx import db as db_module
 from ebdx.db import (
     _FTS_COLUMNS,
     SCHEMA_VERSION,
+    AddedColumn,
     InvalidQueryError,
     Migration,
     describe_pending_schema_work,
@@ -53,8 +54,15 @@ def _book(**overrides):
     return data
 
 
+_TEXT_COLUMN = AddedColumn(str, not_null=True, default="")
+
+
 def _noop_schema_setup(db):
     """Migration schema hook for test steps that add only core columns."""
+
+
+def _column_schema(db, table, column):
+    return next(row for row in db.execute(f"PRAGMA table_info({table})") if row[1] == column)
 
 
 def _match_count(db, term):
@@ -959,7 +967,7 @@ def test_migration_preserves_rows_ids_and_search(tmp_path, with_migrations):
         target=2,
         description="add an extra book field",
         apply=add_extra_column,
-        adds={"books": {"extra": str}},
+        adds={"books": {"extra": _TEXT_COLUMN}},
         ensure_schema=_noop_schema_setup,
     )
     with_migrations(step, adds_to_current={"books": {"extra": str}})
@@ -968,6 +976,8 @@ def test_migration_preserves_rows_ids_and_search(tmp_path, with_migrations):
 
     assert db_module.SCHEMA_VERSION == 2
     assert migrated.execute("PRAGMA user_version").fetchone()[0] == 2
+    extra = _column_schema(migrated, "books", "extra")
+    assert (extra[2], extra[3], extra[4]) == ("TEXT", 1, "''")
     assert list(migrated.execute("SELECT * FROM books ORDER BY id")) == [
         (*before_books[0], ""),
         (*before_books[1], ""),
@@ -997,10 +1007,14 @@ def test_migrations_run_in_order_and_resume_from_an_intermediate_version(tmp_pat
         db.execute("UPDATE books SET second_step = first_step || ' completed'")
 
     first = Migration(
-        2, "add first step", add_first, {"books": {"first_step": str}}, _noop_schema_setup
+        2, "add first step", add_first, {"books": {"first_step": _TEXT_COLUMN}}, _noop_schema_setup
     )
     second = Migration(
-        3, "add second step", add_second, {"books": {"second_step": str}}, _noop_schema_setup
+        3,
+        "add second step",
+        add_second,
+        {"books": {"second_step": _TEXT_COLUMN}},
+        _noop_schema_setup,
     )
 
     # Prepare another database already stamped after step one before enabling
@@ -1046,13 +1060,17 @@ def test_failed_migration_rolls_back_and_later_open_resumes(tmp_path, with_migra
         db.execute("INSERT INTO missing_table VALUES (1)")
 
     first = Migration(
-        2, "add first step", add_first, {"books": {"first_step": str}}, _noop_schema_setup
+        2, "add first step", add_first, {"books": {"first_step": _TEXT_COLUMN}}, _noop_schema_setup
     )
     failing = Migration(
-        3, "failing step", fail_after_ddl, {"books": {"second_step": str}}, _noop_schema_setup
+        3,
+        "failing step",
+        fail_after_ddl,
+        {"books": {"second_step": _TEXT_COLUMN}},
+        _noop_schema_setup,
     )
-    additions = {"books": {"first_step": str, "second_step": str}}
-    with_migrations(first, failing, adds_to_current=additions)
+    current_columns = {"books": {"first_step": str, "second_step": str}}
+    with_migrations(first, failing, adds_to_current=current_columns)
 
     with pytest.raises(sqlite3.OperationalError, match="missing_table"):
         get_database(str(db_path))
@@ -1069,9 +1087,13 @@ def test_failed_migration_rolls_back_and_later_open_resumes(tmp_path, with_migra
         db.execute("ALTER TABLE books ADD COLUMN second_step TEXT NOT NULL DEFAULT ''")
 
     resumed_step = Migration(
-        3, "add second step", add_second, {"books": {"second_step": str}}, _noop_schema_setup
+        3,
+        "add second step",
+        add_second,
+        {"books": {"second_step": _TEXT_COLUMN}},
+        _noop_schema_setup,
     )
-    with_migrations(first, resumed_step, adds_to_current=additions)
+    with_migrations(first, resumed_step, adds_to_current=current_columns)
     resumed = get_database(str(db_path))
     assert resumed.execute("PRAGMA user_version").fetchone()[0] == 3
     assert resumed.execute("SELECT id FROM books").fetchone()[0] == saved.id
@@ -1090,7 +1112,7 @@ def test_migratable_version_is_recognised_for_dry_run_planning(tmp_path, with_mi
         2,
         "add extra metadata",
         add_extra,
-        {"books": {"extra": str}},
+        {"books": {"extra": _TEXT_COLUMN}},
         _noop_schema_setup,
         rebuilds_search=True,
     )
@@ -1124,7 +1146,11 @@ def test_versioned_layout_still_requires_columns_from_its_own_version(tmp_path, 
         db.execute("ALTER TABLE books ADD COLUMN extra TEXT NOT NULL DEFAULT ''")
 
     step = Migration(
-        2, "add extra metadata", add_extra, {"books": {"extra": str}}, _noop_schema_setup
+        2,
+        "add extra metadata",
+        add_extra,
+        {"books": {"extra": _TEXT_COLUMN}},
+        _noop_schema_setup,
     )
     with_migrations(step, adds_to_current={"books": {"extra": str}})
     readonly = get_database(str(db_path), read_only=True)
@@ -1148,7 +1174,7 @@ def test_migration_rebuilds_extended_search_index_and_triggers(tmp_path, with_mi
         2,
         "index the extra search field",
         add_search_field,
-        {"books": {"extra_search": str}},
+        {"books": {"extra_search": _TEXT_COLUMN}},
         _noop_schema_setup,
         rebuilds_search=True,
     )
@@ -1183,7 +1209,7 @@ def test_failed_post_migration_fts_repair_is_retryable(monkeypatch, tmp_path, wi
         2,
         "index the extra search field",
         add_search_field,
-        {"books": {"extra_search": str}},
+        {"books": {"extra_search": _TEXT_COLUMN}},
         _noop_schema_setup,
         rebuilds_search=True,
     )
@@ -1227,7 +1253,7 @@ def test_migration_owned_schema_objects_exist_in_fresh_and_partial_databases(
         2,
         "add migration records",
         create_records,
-        {"books": {"migrated_field": str}},
+        {"books": {"migrated_field": _TEXT_COLUMN}},
         ensure_records,
     )
     with_migrations(step, adds_to_current={"books": {"migrated_field": str}})
@@ -1235,6 +1261,8 @@ def test_migration_owned_schema_objects_exist_in_fresh_and_partial_databases(
     fresh = get_database(str(tmp_path / "fresh.db"))
     assert "migration_records" in fresh.table_names()
     assert "migrated_field" in fresh["books"].columns_dict
+    fresh_field = _column_schema(fresh, "books", "migrated_field")
+    assert (fresh_field[2], fresh_field[3], fresh_field[4]) == ("TEXT", 1, "''")
     assert fresh.execute("PRAGMA user_version").fetchone()[0] == 2
 
     partial_path = tmp_path / "partial.db"
@@ -1249,6 +1277,8 @@ def test_migration_owned_schema_objects_exist_in_fresh_and_partial_databases(
     assert "books" in partial.table_names()
     assert "migration_records" in partial.table_names()
     assert "migrated_field" in partial["books"].columns_dict
+    partial_field = _column_schema(partial, "books", "migrated_field")
+    assert (partial_field[2], partial_field[3], partial_field[4]) == ("TEXT", 1, "''")
     assert partial.execute("PRAGMA user_version").fetchone()[0] == 2
     assert partial.execute("SELECT name FROM authors").fetchone()[0] == "Existing Author"
 
@@ -1263,7 +1293,11 @@ def test_read_only_open_does_not_apply_pending_migrations(tmp_path, with_migrati
         db.execute("ALTER TABLE books ADD COLUMN extra TEXT NOT NULL DEFAULT ''")
 
     step = Migration(
-        2, "add an extra book field", add_extra, {"books": {"extra": str}}, _noop_schema_setup
+        2,
+        "add an extra book field",
+        add_extra,
+        {"books": {"extra": _TEXT_COLUMN}},
+        _noop_schema_setup,
     )
     with_migrations(step, adds_to_current={"books": {"extra": str}})
     before = _schema_fingerprint(db_path)
