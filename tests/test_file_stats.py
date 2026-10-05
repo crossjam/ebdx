@@ -23,6 +23,17 @@ def test_get_file_stats_for_regular_file(tmp_path):
     )
 
 
+def test_get_file_stats_hashes_all_chunks(tmp_path):
+    """Hash all content when a file spans multiple read chunks."""
+    contents = bytes(range(256)) * 100
+    file_path = tmp_path / "large-book.epub"
+    file_path.write_bytes(contents)
+
+    stats = get_file_stats(file_path)
+
+    assert stats.content_hash == hashlib.sha256(contents).hexdigest()
+
+
 def test_get_file_stats_for_empty_file(tmp_path):
     """An empty file has zero size and the SHA-256 digest of empty bytes."""
     file_path = tmp_path / "empty.epub"
