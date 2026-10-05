@@ -3,7 +3,6 @@
 import hashlib
 from datetime import UTC, datetime
 
-from ebdx.utils import file_stats
 from ebdx.utils.file_stats import FileStats, get_file_stats
 
 
@@ -63,18 +62,18 @@ def test_get_file_stats_hashes_when_stat_fails(tmp_path, monkeypatch):
     )
 
 
-def test_get_file_stats_preserves_stat_fields_when_hashing_fails(tmp_path, monkeypatch):
-    """A hash failure does not discard independently available stat fields."""
+def test_get_file_stats_preserves_stat_fields_when_file_is_unreadable(tmp_path, monkeypatch):
+    """A read error does not discard independently available stat fields."""
     contents = b"readable metadata"
     file_path = tmp_path / "book.epub"
     file_path.write_bytes(contents)
     expected_mtime = datetime.fromtimestamp(file_path.stat().st_mtime, tz=UTC)
     expected_mtime = expected_mtime.isoformat().replace("+00:00", "Z")
 
-    def fail_hash(_path):
-        raise OSError("hash failed")
+    def fail_open(_path, *_args, **_kwargs):
+        raise PermissionError("file is unreadable")
 
-    monkeypatch.setattr(file_stats, "_compute_sha256", fail_hash)
+    monkeypatch.setattr(type(file_path), "open", fail_open)
 
     stats = get_file_stats(file_path)
 
