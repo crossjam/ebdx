@@ -41,15 +41,20 @@ earlier layout that has existed.
 class Migration(NamedTuple):
     target: int                             # the version this step produces
     description: str                        # shown by --dry-run
-    apply: Callable[[Database], None]       # the DDL and data changes
+    apply: Callable[[Database], None]       # the versioned DDL and data changes
     adds: Mapping[str, Mapping[str, type]]  # table -> {column: type} this step introduces
+    ensure_schema: Callable[[Database], None]  # idempotently creates step-owned objects
     rebuilds_search: bool = False           # the step drops books_fts; see below
 
 _MIGRATIONS: tuple[Migration, ...] = ()
 ```
 
 `SCHEMA_VERSION` is derived as `_BASE_VERSION + len(_MIGRATIONS)`, with `_BASE_VERSION = 1`.
-An import-time check asserts the targets run contiguously from `_BASE_VERSION + 1`.
+An import-time check asserts the targets run contiguously from `_BASE_VERSION + 1`. The
+versioned `apply` callback upgrades existing layouts. The idempotent `ensure_schema` callback
+runs from `_create_schema` on every open, including fresh databases, to create migration-owned
+tables and indexes not represented by the core column maps. It performs schema setup only;
+data transformations stay in the versioned `apply` callback.
 
 *Alternatives:* SQL files per version would be simpler to read, but a step that changes the
 search index needs `_repopulate_fts` (Python), and ydcx will need a data move that joins
@@ -59,12 +64,15 @@ a handful of steps against a single-user file.
 ### The expected layout at version N is derived from the current one
 
 `_BOOKS_COLUMNS` and `_AUTHORS_COLUMNS` stay the single source of truth for the current
-layout, and `_create_schema` keeps building fresh databases directly from them. No
-migrations run for a new file. The layout expected at version N is the current layout minus
-every column (and table) that a step with `target > N` adds. `_missing_schema_columns` takes
-the recorded version and checks against that. `plan_mode`, `unrecognised_structure` and
-`would_fail_to_open` inherit the fix. This is what stops the first added column from
-reporting every version-1 database as unusable.
+core layout, and `_create_schema` builds fresh databases from them before running each
+migration's idempotent `ensure_schema` callback. Versioned data migrations are not replayed
+for a fresh file. If a migratable partial database has no `books` table, the core tables are
+first created in the layout expected at its recorded version, then the pending steps run;
+this prevents it from being stamped current while skipping required schema changes. The
+layout expected at version N is the current core layout minus every column a step with
+`target > N` adds. `_missing_schema_columns` takes the recorded version and checks against
+that. `plan_mode`, `unrecognised_structure` and `would_fail_to_open` inherit the fix. This is
+what stops the first added column from reporting every version-1 database as unusable.
 
 *Alternative:* a frozen snapshot of each version's layout. It is explicit, but every step
 would have to restate the whole schema, and a snapshot that disagrees with the step it
@@ -78,11 +86,12 @@ SQLite's DDL and `user_version` are both transactional, so the step and its stam
 together. `IMMEDIATE` takes the write lock up front, so a concurrent `ebdx index` fails
 cleanly at the start instead of midway.
 
-Steps must use `db.execute` (`ALTER TABLE ... ADD COLUMN`, `CREATE TABLE`, `INSERT ...
-SELECT`), not sqlite-utils helpers such as `Table.transform` or `add_column`. Several of
-those wrap their work in `with db.conn:`, which commits the enclosing transaction early and
-would break atomicity silently. A test with a deliberately failing second statement guards
-this.
+Both callbacks must use `db.execute` (`ALTER TABLE ... ADD COLUMN`, `CREATE TABLE IF NOT
+EXISTS`, `INSERT ... SELECT`), not sqlite-utils helpers such as `Table.transform` or
+`add_column`. Several of those wrap their work in `with db.conn:`, which commits the
+enclosing transaction early and would break atomicity silently. `ensure_schema` must be
+idempotent because it runs on every schema setup. Tests cover a deliberately failing
+migration statement and fresh/partial database schema creation.
 
 *Alternative:* one transaction around all pending steps. It is simpler, but a failure then
 throws away steps that succeeded. Per-step transactions give the spec's resume-from-last-good

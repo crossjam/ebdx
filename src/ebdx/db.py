@@ -27,17 +27,22 @@ class InvalidQueryError(ValueError):
 class Migration(NamedTuple):
     """One atomic schema upgrade, from the preceding version to ``target``.
 
-    Migration functions must use raw ``db.execute`` statements only. Helpers
-    such as sqlite-utils' ``add_column`` or ``Table.transform`` may commit the
-    enclosing transaction and break atomicity. A step that changes what the
-    full-text index reads must drop it with :func:`_drop_fts` and set
-    ``rebuilds_search=True`` so the next schema setup recreates and refills it.
+    ``apply`` must use raw ``db.execute`` statements only. Helpers such as
+    sqlite-utils' ``add_column`` or ``Table.transform`` may commit the enclosing
+    transaction and break atomicity. ``ensure_schema`` must idempotently create
+    any migration-owned tables or indexes not covered by the core schema; it
+    runs on fresh databases as well as existing ones. It must also use raw SQL
+    because it may run inside the atomic FTS repair transaction. A step that
+    changes what the full-text index reads must drop it with :func:`_drop_fts`
+    and set ``rebuilds_search=True``, so the next schema setup recreates and
+    refills it.
     """
 
     target: int
     description: str
     apply: Callable[["Database"], None]
     adds: Mapping[str, Mapping[str, type]]
+    ensure_schema: Callable[["Database"], None]
     rebuilds_search: bool = False
 
 
@@ -251,11 +256,22 @@ def _ensure_schema(db: "Database") -> None:
             f"migratable version {_BASE_VERSION}"
         )
         _drop_schema(db)
-    elif _BASE_VERSION <= version < SCHEMA_VERSION and "books" in tables:
+    elif _BASE_VERSION <= version < SCHEMA_VERSION:
+        if "books" not in tables:
+            # A partially initialized but versioned database still needs the
+            # prior version's core tables before its migrations can run. This
+            # preserves any existing authors while avoiding current columns
+            # that the pending steps need to add.
+            expected = _expected_columns_at_version(version)
+            _create_core_tables(db, expected["books"], expected["authors"])
         _apply_migrations(db, version)
 
+    needs_version_stamp = db.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION
     if _fts_index_is_intact(db):
-        _create_schema(db)
+        if needs_version_stamp:
+            _create_schema_and_stamp_atomically(db)
+        else:
+            _create_schema(db)
     else:
         # Warn only when there are books whose index is being rebuilt; on a
         # new database the index is simply absent and nothing was lost.
@@ -264,16 +280,25 @@ def _ensure_schema(db: "Database") -> None:
                 "The books_fts search index is missing or is not an FTS5 "
                 "table; rebuilding it from the stored books"
             )
-        _repair_search_index_atomically(db)
+        _repair_search_index_atomically(
+            db, target_version=SCHEMA_VERSION if needs_version_stamp else None
+        )
 
-    # New files, pre-path rebuilds, and empty/incomplete files can move
-    # directly to the current schema. Migrated databases were stamped inside
-    # each migration transaction; writing the final value again is harmless.
-    if version < SCHEMA_VERSION:
+
+def _create_schema_and_stamp_atomically(db: "Database") -> None:
+    """Create a fresh or incomplete schema and its version stamp atomically."""
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        _create_schema(db)
         db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        db.execute("COMMIT")
+    except BaseException:
+        if db.conn.in_transaction:
+            db.execute("ROLLBACK")
+        raise
 
 
-def _repair_search_index_atomically(db: "Database") -> None:
+def _repair_search_index_atomically(db: "Database", *, target_version: int | None = None) -> None:
     """Recreate and refill the FTS index in one recoverable transaction.
 
     A migration may have committed after dropping ``books_fts``. Keeping the
@@ -286,6 +311,8 @@ def _repair_search_index_atomically(db: "Database") -> None:
         _drop_fts(db)
         _create_schema(db)
         _repopulate_fts(db)
+        if target_version is not None:
+            db.execute(f"PRAGMA user_version = {target_version}")
         db.execute("COMMIT")
     except BaseException:
         if db.conn.in_transaction:
@@ -634,30 +661,34 @@ def _drop_schema(db: "Database") -> None:
     db["authors"].drop(ignore=True)
 
 
-def _create_schema(db: "Database") -> None:
-    """Create the books, authors, and FTS5 objects if they are absent.
-
-    Safe to call on every open: an up-to-date database is left untouched.
-    """
-    # Authors table
+def _create_core_tables(
+    db: "Database",
+    books_columns: Mapping[str, type],
+    authors_columns: Mapping[str, type],
+) -> None:
+    """Create the core tables and path index for a specified layout version."""
     db["authors"].create(
-        {"id": int, "name": str},
+        dict(authors_columns),
         pk="id",
         not_null=["name"],
         if_not_exists=True,
     )
-
-    # Books table. `id` stays an autoincrement integer because the
-    # external-content FTS5 index keys on it via content_rowid; `path` is the
-    # stable identity used by the indexer and carries a unique index.
     db["books"].create(
-        dict(_BOOKS_COLUMNS),
+        dict(books_columns),
         pk="id",
         not_null=["title", "path"],
         foreign_keys=["author_id"],
         if_not_exists=True,
     )
     db["books"].create_index(["path"], unique=True, if_not_exists=True)
+
+
+def _create_schema(db: "Database") -> None:
+    """Create the books, authors, and FTS5 objects if they are absent.
+
+    Safe to call on every open: an up-to-date database is left untouched.
+    """
+    _create_core_tables(db, _BOOKS_COLUMNS, _AUTHORS_COLUMNS)
 
     # FTS5 full-text search index
     db.execute(
@@ -705,6 +736,12 @@ def _create_schema(db: "Database") -> None:
         END
         """
     )
+
+    # Migrations may own additional managed tables or indexes that are not
+    # represented by the core column maps above. Their idempotent schema
+    # callbacks make those objects part of both fresh and upgraded databases.
+    for migration in _MIGRATIONS:
+        migration.ensure_schema(db)
 
 
 class SavedBook(NamedTuple):

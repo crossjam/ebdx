@@ -17,7 +17,9 @@ from click.testing import CliRunner
 from conftest import terminal_frames
 from loguru import logger
 
+from ebdx import db as db_module
 from ebdx.cli import cli
+from ebdx.db import Migration
 from ebdx.scanner import iter_files
 
 
@@ -725,6 +727,106 @@ def test_dry_run_schema_reports_pending_work(runner, tmp_path, make_epub):
     assert result.exit_code == 0, result.output
     assert "Would:" in result.output
     assert _fingerprint(db_path) == before
+
+
+def test_dry_run_index_predicts_migratable_layout_without_mutating_it(
+    runner, tmp_path, make_epub, with_migrations, monkeypatch
+):
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Dune", "author": "FH"}])
+    make_epub("library/new.epub", title="New Book", author="New Author")
+
+    def add_extra(db):
+        db.execute("ALTER TABLE books ADD COLUMN extra TEXT NOT NULL DEFAULT ''")
+
+    def ensure_nothing(db):
+        pass
+
+    step = Migration(
+        2,
+        "add extra metadata",
+        add_extra,
+        {"books": {"extra": str}},
+        ensure_nothing,
+    )
+    with_migrations(step, adds_to_current={"books": {"extra": str}})
+    before = _fingerprint(db_path)
+    before_mtime = db_path.stat().st_mtime_ns
+
+    dry = runner.invoke(
+        cli, ["--dry-run", "index", str(tmp_path / "library"), "--database", str(db_path)]
+    )
+
+    assert dry.exit_code == 0, dry.output
+    assert "apply migration to version 2: add extra metadata" in dry.output
+    assert "│ Would index  │     1 │" in dry.output
+    assert "│ Would update │     1 │" in dry.output
+    assert (_fingerprint(db_path), db_path.stat().st_mtime_ns) == (before, before_mtime)
+
+    from ebdx import extractor
+
+    original_extract = extractor.extract_metadata
+
+    def extract_with_extra(path):
+        metadata = original_extract(path)
+        if metadata is not None:
+            metadata["extra"] = "extracted by index"
+        return metadata
+
+    monkeypatch.setattr(extractor, "extract_metadata", extract_with_extra)
+    real = runner.invoke(cli, ["index", str(tmp_path / "library"), "--database", str(db_path)])
+    assert real.exit_code == 0, real.output
+    assert "│ Newly indexed │     1 │" in real.output
+    assert "│ Updated       │     1 │" in real.output
+    conn = sqlite3.connect(str(db_path))
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert {row[0] for row in conn.execute("SELECT extra FROM books")} == {"extracted by index"}
+    conn.close()
+
+
+def test_dry_run_search_and_schema_report_pending_migrations_read_only(
+    runner, tmp_path, make_epub, with_migrations
+):
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Dune", "author": "FH"}])
+
+    def add_search_field(db):
+        db.execute("ALTER TABLE books ADD COLUMN extra_search TEXT NOT NULL DEFAULT ''")
+        db_module._drop_fts(db)
+
+    def ensure_nothing(db):
+        pass
+
+    step = Migration(
+        2,
+        "index extra search text",
+        add_search_field,
+        {"books": {"extra_search": str}},
+        ensure_nothing,
+        rebuilds_search=True,
+    )
+    with_migrations(
+        step,
+        adds_to_current={"books": {"extra_search": str}},
+        fts_columns=(*db_module._FTS_COLUMNS, "extra_search"),
+    )
+    before = _fingerprint(db_path)
+    before_mtime = db_path.stat().st_mtime_ns
+
+    search = runner.invoke(cli, ["--dry-run", "search", "Dune", "--database", str(db_path)])
+    assert search.exit_code == 0, search.output
+    assert "apply migration to version 2: index extra search text" in search.output
+    assert "Dune" in search.output
+
+    needs_migration = runner.invoke(
+        cli,
+        ["--dry-run", "search", "--fts", "extra_search:stellar", "--database", str(db_path)],
+    )
+    assert needs_migration.exit_code == 0, needs_migration.output
+    assert "The search cannot run until that happens" in needs_migration.output
+
+    schema = runner.invoke(cli, ["--dry-run", "schema", "--database", str(db_path)])
+    assert schema.exit_code == 0, schema.output
+    assert "apply migration to version 2: index extra search text" in schema.output
+    assert (_fingerprint(db_path), db_path.stat().st_mtime_ns) == (before, before_mtime)
 
 
 def test_dry_run_search_shows_no_stale_results_before_a_rebuild(runner, tmp_path):

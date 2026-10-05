@@ -27,6 +27,20 @@ later open SHALL resume from there.
 - **THEN** every intervening step is applied in version order and the recorded version is
   the current one
 
+#### Scenario: Fresh databases include migration-owned schema objects
+
+- **WHEN** a new database is created while migrations define additional managed tables or
+  indexes
+- **THEN** the core current schema and every migration-owned schema object are present at the
+  current recorded version
+
+#### Scenario: A partial migratable database receives pending schema changes
+
+- **WHEN** a database at a migratable version has no `books` table but contains other managed
+  data and is opened
+- **THEN** missing core tables are created in the layout expected at its recorded version,
+  pending migrations are applied in order, and the database reaches the current version
+
 #### Scenario: Search works after a migration
 
 - **WHEN** a database is migrated on open and a search is run that matched a book before the
