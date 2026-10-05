@@ -1007,7 +1007,11 @@ _FILE_STATS_COLUMNS = {
     "file_size": AddedColumn(column_type=int),
     "file_mtime": AddedColumn(column_type=str),
     "content_hash": AddedColumn(column_type=str),
-    "indexed_at": AddedColumn(column_type=str, not_null=True, default="CURRENT_TIMESTAMP"),
+    # sqlite-utils treats values ending in ')' as SQL expressions. Keep the
+    # parentheses so fresh schemas get SQLite's timestamp, rather than a
+    # quoted string literal, while the rebuild migration below remains usable
+    # for existing databases.
+    "indexed_at": AddedColumn(column_type=str, not_null=True, default="(CURRENT_TIMESTAMP)"),
 }
 
 _FILE_STATS_MIGRATION = Migration(

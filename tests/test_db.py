@@ -105,6 +105,16 @@ def test_get_database_stamps_schema_version(tmp_path):
     assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
 
 
+def test_fresh_database_assigns_timestamp_to_indexed_at(tmp_path):
+    db = get_database(str(tmp_path / "ebdx.db"))
+
+    saved = save_book(db, _book())
+    indexed_at = db["books"].get(saved.id)["indexed_at"]
+
+    assert indexed_at != "CURRENT_TIMESTAMP"
+    assert db.execute("SELECT datetime(?) IS NOT NULL", [indexed_at]).fetchone()[0] == 1
+
+
 def test_books_path_has_unique_index(tmp_path):
     db = get_database(str(tmp_path / "ebdx.db"))
     assert any(ix.unique and ix.columns == ["path"] for ix in db["books"].indexes)
