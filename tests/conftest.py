@@ -155,11 +155,29 @@ def diagnostic_terminal(monkeypatch) -> io.StringIO:
 
 @pytest.fixture
 def with_migrations(monkeypatch):
-    """Patch ebdx.db with test-only migrations and their resulting layout."""
+    """Patch ebdx.db with a test-only migration history and resulting layout.
+
+    The production file-statistics migration is always registered, including
+    under pytest. These migration-framework tests intentionally start from the
+    version-1 layout so their synthetic steps can own version 2.
+    """
+    from ebdx import db
+
+    books = dict(db._BOOKS_COLUMNS)
+    authors = dict(db._AUTHORS_COLUMNS)
+    for migration in db._MIGRATIONS:
+        for table, columns in migration.adds.items():
+            current = {"books": books, "authors": authors}.get(table)
+            if current is not None:
+                for column in columns:
+                    current.pop(column, None)
+
+    monkeypatch.setattr(db, "_MIGRATIONS", ())
+    monkeypatch.setattr(db, "SCHEMA_VERSION", db._BASE_VERSION)
+    monkeypatch.setattr(db, "_BOOKS_COLUMNS", books)
+    monkeypatch.setattr(db, "_AUTHORS_COLUMNS", authors)
 
     def configure(*steps, adds_to_current=None, fts_columns=None):
-        from ebdx import db
-
         books = dict(db._BOOKS_COLUMNS)
         authors = dict(db._AUTHORS_COLUMNS)
         current_columns = {"books": books, "authors": authors}

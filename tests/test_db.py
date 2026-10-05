@@ -993,6 +993,35 @@ def test_migration_preserves_rows_ids_and_search(tmp_path, with_migrations):
     )
 
 
+def test_file_stats_migration_opens_an_existing_version_1_database(tmp_path):
+    """A v1 library upgrades with the production migration under pytest."""
+    db_path = tmp_path / "file-stats-v1.db"
+    legacy = sqlite_utils.Database(str(db_path))
+    version_1 = db_module._expected_columns_at_version(1)
+    legacy["authors"].create(version_1["authors"], pk="id", not_null=["name"])
+    legacy["books"].create(
+        version_1["books"],
+        pk="id",
+        not_null=["title", "path"],
+        foreign_keys=["author_id"],
+    )
+    legacy["books"].create_index(["path"], unique=True)
+    saved = save_book(legacy, _book(title="Dune"))
+    legacy.execute("PRAGMA user_version = 1")
+    legacy.conn.close()
+
+    migrated = get_database(str(db_path))
+
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 2
+    row = migrated["books"].get(saved.id)
+    assert row["title"] == "Dune"
+    assert {"file_size", "file_mtime", "content_hash", "indexed_at"} <= set(row)
+    indexed_at = _column_schema(migrated, "books", "indexed_at")
+    assert (indexed_at[2], indexed_at[3], indexed_at[4]) == ("TEXT", 1, "CURRENT_TIMESTAMP")
+    assert row["indexed_at"] is not None
+    assert [hit["title"] for hit in search_books(migrated, "Dune")] == ["Dune"]
+
+
 def test_migrations_run_in_order_and_resume_from_an_intermediate_version(tmp_path, with_migrations):
     db_path = tmp_path / "multi.db"
     db = get_database(str(db_path))

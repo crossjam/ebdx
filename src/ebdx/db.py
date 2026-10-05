@@ -6,7 +6,6 @@ for indexing and searching EPUB metadata using sqlite_utils.
 """
 
 import sqlite3
-import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -71,7 +70,6 @@ def _validate_migrations() -> None:
         expected += 1
 
 
-_validate_migrations()
 SCHEMA_VERSION = _BASE_VERSION + len(_MIGRATIONS)
 
 _FTS_TRIGGERS = ("books_ai", "books_ad", "books_au")
@@ -117,9 +115,6 @@ def _validate_migration_columns() -> None:
                         f"migration {migration.target} adds {table}.{name}, but the current "
                         "schema column map does not have its declared type"
                     )
-
-
-_validate_migration_columns()
 
 
 def _validate_fts_query(query: str) -> None:
@@ -956,15 +951,52 @@ def search_books(
     return books
 
 
-# File-statistics migration. It is enabled outside tests because the migration
-# framework's test fixture supplies its own version history.
+# File-statistics migration.
 def _apply_file_stats_migration(db: "Database") -> None:
-    db.execute("ALTER TABLE books ADD COLUMN file_size INTEGER")
-    db.execute("ALTER TABLE books ADD COLUMN file_mtime TEXT")
-    db.execute("ALTER TABLE books ADD COLUMN content_hash TEXT")
-    # SQLite rejects CURRENT_TIMESTAMP as an ADD COLUMN default. Existing rows
-    # have no historical value, so leave this nullable until they are re-indexed.
-    db.execute("ALTER TABLE books ADD COLUMN indexed_at TEXT")
+    """Add file statistics while retaining indexed_at's timestamp contract.
+
+    SQLite permits only constant defaults in ``ALTER TABLE ... ADD COLUMN``;
+    attempting to add ``DEFAULT CURRENT_TIMESTAMP`` aborts the entire upgrade.
+    Rebuilding the managed table lets existing rows receive an explicit
+    timestamp and gives both upgraded and fresh databases the same constraint.
+    """
+    _drop_fts(db)
+    db.execute(
+        """
+        CREATE TABLE books_replacement (
+            id INTEGER PRIMARY KEY,
+            path TEXT NOT NULL,
+            title TEXT NOT NULL,
+            author_id INTEGER REFERENCES authors(id),
+            series TEXT,
+            series_index REAL,
+            publisher TEXT,
+            published TEXT,
+            isbn TEXT,
+            language TEXT,
+            tags TEXT,
+            file_size INTEGER,
+            file_mtime TEXT,
+            content_hash TEXT,
+            indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    db.execute(
+        """
+        INSERT INTO books_replacement (
+            id, path, title, author_id, series, series_index, publisher,
+            published, isbn, language, tags, indexed_at
+        )
+        SELECT
+            id, path, title, author_id, series, series_index, publisher,
+            published, isbn, language, tags, CURRENT_TIMESTAMP
+        FROM books
+        """
+    )
+    db.execute("DROP TABLE books")
+    db.execute("ALTER TABLE books_replacement RENAME TO books")
+    db.execute("CREATE UNIQUE INDEX idx_books_path ON books(path)")
 
 
 def _ensure_file_stats_schema(db: "Database") -> None:
@@ -975,25 +1007,27 @@ _FILE_STATS_COLUMNS = {
     "file_size": AddedColumn(column_type=int),
     "file_mtime": AddedColumn(column_type=str),
     "content_hash": AddedColumn(column_type=str),
-    "indexed_at": AddedColumn(column_type=str),
+    "indexed_at": AddedColumn(column_type=str, not_null=True, default="CURRENT_TIMESTAMP"),
 }
 
-if "pytest" not in sys.modules:
-    _MIGRATIONS = (
-        Migration(
-            target=2,
-            description="add file statistics tracking",
-            apply=_apply_file_stats_migration,
-            adds={"books": _FILE_STATS_COLUMNS},
-            ensure_schema=_ensure_file_stats_schema,
-        ),
-    )
-    SCHEMA_VERSION = _BASE_VERSION + len(_MIGRATIONS)
-    _BOOKS_COLUMNS.update(
-        {
-            "file_size": int,
-            "file_mtime": str,
-            "content_hash": str,
-            "indexed_at": str,
-        }
-    )
+_FILE_STATS_MIGRATION = Migration(
+    target=2,
+    description="add file statistics tracking",
+    apply=_apply_file_stats_migration,
+    adds={"books": _FILE_STATS_COLUMNS},
+    ensure_schema=_ensure_file_stats_schema,
+    rebuilds_search=True,
+)
+
+_MIGRATIONS = (_FILE_STATS_MIGRATION,)
+_BOOKS_COLUMNS.update(
+    {
+        "file_size": int,
+        "file_mtime": str,
+        "content_hash": str,
+        "indexed_at": str,
+    }
+)
+_validate_migrations()
+_validate_migration_columns()
+SCHEMA_VERSION = _BASE_VERSION + len(_MIGRATIONS)
