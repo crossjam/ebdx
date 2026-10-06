@@ -3,8 +3,8 @@
 ### Requirement: Index results identify unchanged files that were skipped
 
 The `index` command SHALL report the number of discovered files that were skipped
-because their saved size and modification time matched the filesystem facts observed
-before metadata extraction. The result SHALL continue to distinguish newly indexed
+because their saved size, modification time, and content hash matched the file facts
+observed before metadata extraction. The result SHALL continue to distinguish newly indexed
 files, updated files, and failures from skipped files.
 
 #### Scenario: An unchanged second run reports skips
@@ -16,8 +16,8 @@ files, updated files, and failures from skipped files.
 
 #### Scenario: A changed file is not reported as skipped
 
-- **WHEN** an EPUB’s saved size or modification time differs from its current filesystem
-  fact
+- **WHEN** an EPUB’s saved size, modification time, or content hash differs from its
+  current file fact
 - **THEN** the index result reports it as updated after a successful write, not as
   skipped
 

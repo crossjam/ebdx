@@ -7,9 +7,8 @@ nor its file has changed. The store also knows nothing about the file that produ
 book row, which prevents incremental indexing and makes a content-derived identity
 available only to future features.
 
-This change records inexpensive file facts, adds a content hash for rows that are
-written, and uses the inexpensive facts to avoid metadata extraction for unchanged
-paths.
+This change records file facts, including a content hash, and uses them to avoid
+metadata extraction for unchanged paths.
 
 ## Data Model
 
@@ -46,25 +45,26 @@ transaction/version-stamping mechanism, so a failed step leaves the prior layout
 
 The scanner, which controls when extraction happens, makes the skip decision:
 
-1. Resolve the candidate path and call `stat()` before metadata extraction.
-2. Ask the store for the saved `file_size` and `file_mtime` for that resolved path.
-3. If a row exists and both saved facts match the current facts, count the file as
-   `skipped` and do not call `extract_metadata` or `save_book`.
-4. Otherwise extract metadata. For a successful extraction, compute the SHA-256 hash,
-   attach the current file facts and an explicitly generated `indexed_at`, then call
-   `save_book`.
+1. Before the walk, read every stored book's `file_size`, `file_mtime`, and
+   `content_hash` in one query, keyed by resolved path.
+2. For each candidate, resolve its path, `stat()` it, and compute its SHA-256 hash
+   before metadata extraction.
+3. If a row exists and all three saved facts are non-null and match the current facts,
+   count the file as `skipped` and do not call `extract_metadata` or `save_book`.
+4. Otherwise extract metadata, then read the file facts again. If they changed during
+   extraction, store nothing and count the file as failed; a later run indexes the
+   stable file. If not, attach the facts and an explicitly generated `indexed_at`, then
+   call `save_book`.
 5. A failed `stat()`, extraction, hash, or write is reported through the run’s failure
    handling and does not turn an existing row into a false “unchanged” row.
 
-The store exposes a small path-keyed read API for step 2. `save_book` remains
-responsible only for persisting a supplied successful write; it does not decide whether
-extraction can be skipped. This keeps the optimization effective for the actual control
-flow and leaves callers that save already-extracted metadata well-defined.
+`save_book` remains responsible only for persisting a supplied successful write; it does
+not decide whether extraction can be skipped. The dry run follows the same steps without
+writing, so its predicted counts match a real run.
 
-Size and mtime are deliberately a fast invalidation check, not a cryptographic change
-proof. A changed file with an unchanged size and mtime can be missed; the hash is
-calculated when a write is required and is stored for later identity work, not read on
-every scan.
+The hash is part of the skip decision, so an edit that preserves size and mtime is still
+caught. The cost is that every scan reads every file's bytes, even when nothing changed.
+Metadata extraction, the more expensive step, still runs only for changed files.
 
 ## Progress and Errors
 

@@ -61,7 +61,13 @@ Extraction SHALL return the available metadata for a readable EPUB, and SHALL si
 
 ### Requirement: Indexing is idempotent over a library
 
-The `index` command SHALL walk the given root, extract metadata from each EPUB found, and store each result against that file's absolute path. Running it again over an unchanged library SHALL leave the number of stored books unchanged.
+The `index` command SHALL walk the given root, resolve each EPUB path, and obtain its
+size, modification time, and SHA-256 content hash before metadata extraction. For a path
+with a stored record whose saved size, modification time, and content hash are all
+non-null and all match, it SHALL skip metadata extraction and storage. For every other
+readable EPUB, it SHALL extract metadata, confirm the file's facts are unchanged since
+they were obtained, and store the result against that file’s absolute path. Running it
+again over an unchanged library SHALL leave the number of stored books unchanged.
 
 #### Scenario: First run populates the library
 
@@ -70,32 +76,53 @@ The `index` command SHALL walk the given root, extract metadata from each EPUB f
 
 #### Scenario: Second run adds no duplicates
 
-- **WHEN** `index` is run a second time against the same unchanged directory
-- **THEN** the number of book records is the same as after the first run
+- **WHEN** `index` is run a second time against the same unchanged directory after file
+  facts were stored on the first run
+- **THEN** no metadata extraction is attempted for those files and the number of book
+  records is the same as after the first run
+
+#### Scenario: A legacy row is refreshed rather than skipped
+
+- **WHEN** an existing book record is missing any of its saved size, modification
+  time, or content hash
+- **THEN** indexing its path extracts metadata and records current file facts
 
 #### Scenario: Edited book is refreshed
 
-- **WHEN** an EPUB's title is changed on disk and `index` is run again
-- **THEN** that file's existing record shows the new title
+- **WHEN** an EPUB’s size, modification time, or content changes on disk and `index` is
+  run again
+- **THEN** that file’s existing record is refreshed rather than skipped
+
+#### Scenario: A file that changes during extraction is deferred
+
+- **WHEN** an EPUB’s facts differ after metadata extraction from those obtained before it
+- **THEN** nothing is stored for it, it is counted as failed, and a later run indexes
+  the stable file
 
 #### Scenario: Indexed library is searchable from a new process
 
-- **WHEN** `index` completes and `search` is invoked afterwards in a separate process against the same database
+- **WHEN** `index` completes and `search` is invoked afterwards in a separate process
+  against the same database
 - **THEN** the indexed books are returned by matching queries
 
 ### Requirement: One bad file does not stop the run
 
-Indexing SHALL continue past any EPUB it cannot read, and SHALL report per-run counts of files found, newly indexed, updated, and failed.
+Indexing SHALL continue past any EPUB it cannot stat, read, hash, or store, and SHALL
+report per-run counts of files found, newly indexed, updated, skipped, and failed.
 
 #### Scenario: Unreadable file is counted and skipped
 
-- **WHEN** a directory holds both valid EPUBs and one corrupt file, and `index` is run
-- **THEN** every valid EPUB is indexed, the corrupt file is counted as failed, and the command exits successfully
+- **WHEN** a directory holds both valid EPUBs and one corrupt or unreadable file, and
+  `index` is run
+- **THEN** every valid EPUB is indexed or skipped as applicable, the bad file is counted
+  as failed, and the command exits successfully
 
 #### Scenario: Counts distinguish new from updated
 
-- **WHEN** `index` is run over a library, then run again after one new EPUB is added
-- **THEN** the second run reports the new file as indexed and the pre-existing files as updated
+- **WHEN** `index` is run over a library and is then run again after one EPUB changes
+  and one new EPUB is added
+- **THEN** the second run reports the new file as indexed, the changed file as updated,
+  and every unchanged pre-existing file as skipped
 
 #### Scenario: Empty directory
 

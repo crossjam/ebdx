@@ -56,18 +56,18 @@ pre-existing book and author record SHALL be retained.
 
 ### Requirement: The scanner can retrieve saved file facts by path
 
-The store SHALL provide a path-keyed read operation that returns the saved size and
-modification time for a book path without modifying the row. It SHALL distinguish a
-missing book record from one whose file-fact fields are unknown.
+The scanner SHALL read the saved size, modification time, and content hash of every
+stored book in one query, keyed by absolute path, without modifying any row. The result
+SHALL distinguish a missing book record from one whose file-fact fields are unknown.
 
 #### Scenario: Saved facts are returned for a known path
 
-- **WHEN** a caller asks for file facts at the absolute path of a book whose facts were
-  saved
-- **THEN** the stored size and modification time are returned without changing the
-  record
+- **WHEN** the saved facts are read and a book's facts were saved
+- **THEN** its absolute path maps to the stored size, modification time, and content
+  hash, and the record is unchanged
 
 #### Scenario: An unindexed path has no saved facts
 
-- **WHEN** a caller asks for file facts at a path with no book record
-- **THEN** the operation reports that no matching record exists
+- **WHEN** the saved facts are read and a path has no book record
+- **THEN** that path is absent from the result, while a legacy record is present with
+  `NULL` facts
