@@ -124,6 +124,13 @@ found them. A dry run SHALL exit 0 when nothing went wrong.
   recorded schema version predates path-keyed book identity
 - **THEN** no table is dropped or created and the recorded schema version is unchanged
 
+#### Scenario: A migratable database is not migrated
+
+- **WHEN** `index`, `search`, or `schema` is run with the dry-run option against a database
+  recorded at an earlier, migratable schema version
+- **THEN** no migration step is applied, the database's tables, columns, indexes, and
+  triggers are unchanged, and the recorded schema version is unchanged
+
 #### Scenario: Read-only commands are unaffected
 
 - **WHEN** `discover`, `about`, or `version` is run with the dry-run option
@@ -159,14 +166,17 @@ stays byte-identical so it remains usable in a pipeline.
 ### Requirement: Prediction is exact for databases the tool produced
 
 A dry run SHALL report the counts a real run would produce for any database this tool
-wrote — at the current layout, or at an earlier one it knows how to rebuild. It SHALL NOT
+wrote — at the current layout, at an earlier one it migrates in place, or at an earlier
+one it knows how to rebuild. It SHALL NOT
 attempt to predict the outcome for a layout it does not recognise, since doing so would
 require reproducing the whole of the schema-setup and write paths and would drift from
 them. Such a database SHALL instead be reported as unusable, naming what is wrong and
 directing the user to rebuild it, and the command SHALL exit non-zero.
 
 Recognition SHALL be structural — the tables, their columns, and the indexes and triggers
-that are expected to exist. It SHALL NOT extend to the definitions of those objects, since
+that are expected to exist at the schema version the database records, so that an earlier
+layout lacking only what later versions add is recognised rather than rejected. It SHALL
+NOT extend to the definitions of those objects, since
 comparing them means comparing stored SQL text against the text this build happens to emit,
 and a database altered to keep an object's name while changing its body is indistinguishable
 from a healthy one by any cheaper means.
@@ -187,6 +197,43 @@ from a healthy one by any cheaper means.
 - **WHEN** `search` is run with the dry-run option against a database recorded at an
   earlier layout, whose stored rows a real run would discard while rebuilding
 - **THEN** no results are shown, and the output says the library must be re-indexed first
+
+#### Scenario: A migratable earlier layout is predicted exactly
+
+- **WHEN** `index` is run with the dry-run option against a database recorded at an
+  earlier layout that a real run migrates in place
+- **THEN** the reported counts equal those of the equivalent real run — files already
+  stored are reported as updates and the rest as inserts — and the output names each
+  migration that would be applied
+
+#### Scenario: A partial migratable layout names pending migrations
+
+- **WHEN** `schema` is run with the dry-run option against a migratable database without a
+  `books` table
+- **THEN** the output reports creation of the core schema and names each pending migration
+  without changing the database
+
+#### Scenario: A migration keeps stored rows visible
+
+- **WHEN** `search` is run with the dry-run option against a database recorded at an
+  earlier layout that a real run migrates in place
+- **THEN** results are drawn from the stored rows, the output notes that migrations are
+  pending, and it does not say the library must be re-indexed
+
+#### Scenario: A query needing a migrated layout is explained
+
+- **WHEN** `search` is run with the dry-run option against a migratable earlier layout,
+  with a query that fails only because it refers to something a pending migration would
+  add
+- **THEN** the output says the query depends on the pending migration rather than
+  reporting an error in the query, and the exit status is 0
+
+#### Scenario: An earlier layout lacking only later additions is recognised
+
+- **WHEN** `index` is run with the dry-run option against a database recorded at an
+  earlier, migratable version whose tables have every column that version defines and
+  none that later versions add
+- **THEN** the database is not reported as unusable
 
 #### Scenario: An unrecognised layout is reported, not predicted
 
