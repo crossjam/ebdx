@@ -50,8 +50,9 @@ again over an unchanged library SHALL leave the number of stored books unchanged
 
 Indexing SHALL continue past any EPUB it cannot stat, read, hash, or store, and SHALL
 report per-run counts of files found, newly indexed, updated, skipped, and failed. A file
-is counted as failed only when nothing is stored for it; a file stored without some of
-its facts is counted as indexed or updated and is ineligible for later skips.
+is counted as failed only when the current run writes nothing for it, even if an earlier
+run's row for it is retained; a file written without some of its facts is counted as
+indexed or updated and is ineligible for later skips.
 
 #### Scenario: Unreadable file is counted and skipped
 
