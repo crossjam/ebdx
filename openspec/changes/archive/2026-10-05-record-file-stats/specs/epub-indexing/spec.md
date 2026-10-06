@@ -3,11 +3,12 @@
 ### Requirement: Indexing is idempotent over a library
 
 The `index` command SHALL walk the given root, resolve each EPUB path, and obtain its
-size and modification time before metadata extraction. For a path with a stored record
-whose saved non-null size and modification time both match, it SHALL skip metadata
-extraction and storage. For every other readable EPUB, it SHALL extract metadata and
-store the result against that file’s absolute path. Running it again over an unchanged
-library SHALL leave the number of stored books unchanged.
+size, modification time, and SHA-256 content hash before metadata extraction. For a path
+with a stored record whose saved size, modification time, and content hash are all
+non-null and all match, it SHALL skip metadata extraction and storage. For every other
+readable EPUB, it SHALL extract metadata, confirm the file's facts are unchanged since
+they were obtained, and store the result against that file’s absolute path. Running it
+again over an unchanged library SHALL leave the number of stored books unchanged.
 
 #### Scenario: First run populates the library
 
@@ -23,13 +24,21 @@ library SHALL leave the number of stored books unchanged.
 
 #### Scenario: A legacy row is refreshed rather than skipped
 
-- **WHEN** an existing book record has no saved size or modification time
+- **WHEN** an existing book record is missing any of its saved size, modification
+  time, or content hash
 - **THEN** indexing its path extracts metadata and records current file facts
 
 #### Scenario: Edited book is refreshed
 
-- **WHEN** an EPUB’s size or modification time changes on disk and `index` is run again
+- **WHEN** an EPUB’s size, modification time, or content changes on disk and `index` is
+  run again
 - **THEN** that file’s existing record is refreshed rather than skipped
+
+#### Scenario: A file that changes during extraction is deferred
+
+- **WHEN** an EPUB’s facts differ after metadata extraction from those obtained before it
+- **THEN** nothing is stored for it, it is counted as failed, and a later run indexes
+  the stable file
 
 #### Scenario: Indexed library is searchable from a new process
 
@@ -40,7 +49,10 @@ library SHALL leave the number of stored books unchanged.
 ### Requirement: One bad file does not stop the run
 
 Indexing SHALL continue past any EPUB it cannot stat, read, hash, or store, and SHALL
-report per-run counts of files found, newly indexed, updated, skipped, and failed.
+report per-run counts of files found, newly indexed, updated, skipped, and failed. A file
+is counted as failed only when the current run writes nothing for it, even if an earlier
+run's row for it is retained; a file written without some of its facts is counted as
+indexed or updated and is ineligible for later skips.
 
 #### Scenario: Unreadable file is counted and skipped
 
@@ -48,6 +60,12 @@ report per-run counts of files found, newly indexed, updated, skipped, and faile
   `index` is run
 - **THEN** every valid EPUB is indexed or skipped as applicable, the bad file is counted
   as failed, and the command exits successfully
+
+#### Scenario: A file that cannot be hashed is still indexed
+
+- **WHEN** an EPUB's metadata is extracted but its content hash cannot be computed
+- **THEN** it is stored with a `NULL` content hash, counted as indexed or updated, and
+  refreshed rather than skipped on every later run
 
 #### Scenario: Counts distinguish new from updated
 
