@@ -7,7 +7,7 @@ Finding EPUB files beneath a directory, reading their metadata, and loading that
 
 ### Requirement: Discovery lists EPUB files without indexing them
 
-The `discover` command SHALL recursively find `.epub` files under the given paths and report them. It SHALL accept both directories and individual files, SHALL default to the current working directory when given no paths, and SHALL NOT create or modify a database.
+The `discover` command SHALL recursively find `.epub` files under the given paths and report them. It SHALL accept both directories and individual files, SHALL default to the current working directory when given no paths, and SHALL NOT create or modify a database. Its listing is a command result and SHALL be the whole of what it writes to the result stream, whatever it shows on the diagnostic stream while it works.
 
 #### Scenario: Files found under a directory
 
@@ -33,6 +33,12 @@ The `discover` command SHALL recursively find `.epub` files under the given path
 
 - **WHEN** `discover` is run and no database file exists
 - **THEN** no database file is created
+
+#### Scenario: The listing is the only result output
+
+- **WHEN** `discover` is run over a library while showing a progress display
+- **THEN** the table it prints is the only thing written to the result stream, and the
+  listed files are the same as in a run with no display
 
 ### Requirement: Metadata extraction reports failure rather than raising
 
