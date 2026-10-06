@@ -55,8 +55,10 @@ The scanner, which controls when extraction happens, makes the skip decision:
    extraction, store nothing and count the file as failed; a later run indexes the
    stable file. If not, attach the facts and an explicitly generated `indexed_at`, then
    call `save_book`.
-5. A failed `stat()`, extraction, hash, or write is reported through the run’s failure
-   handling and does not turn an existing row into a false “unchanged” row.
+5. A failed extraction or write is reported through the run’s failure handling and
+   does not turn an existing row into a false “unchanged” row. A failed `stat()` or hash
+   leaves that fact `NULL`: the file is still indexed if extraction succeeds, and its
+   incomplete facts keep it from ever being skipped.
 
 `save_book` remains responsible only for persisting a supplied successful write; it does
 not decide whether extraction can be skipped. The dry run follows the same steps without
@@ -86,5 +88,5 @@ facts.
   invoked.
 - A changed size or mtime invokes extraction and updates the existing row without adding
   a duplicate.
-- Stat, extraction, hash, and database-write failures are counted and do not stop other
-  files.
+- Extraction and database-write failures are counted and do not stop other files; a
+  file that cannot be hashed is stored with a `NULL` hash and never skipped.

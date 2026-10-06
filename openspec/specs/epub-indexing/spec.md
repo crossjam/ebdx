@@ -108,7 +108,9 @@ again over an unchanged library SHALL leave the number of stored books unchanged
 ### Requirement: One bad file does not stop the run
 
 Indexing SHALL continue past any EPUB it cannot stat, read, hash, or store, and SHALL
-report per-run counts of files found, newly indexed, updated, skipped, and failed.
+report per-run counts of files found, newly indexed, updated, skipped, and failed. A file
+is counted as failed only when nothing is stored for it; a file stored without some of
+its facts is counted as indexed or updated and is ineligible for later skips.
 
 #### Scenario: Unreadable file is counted and skipped
 
@@ -116,6 +118,12 @@ report per-run counts of files found, newly indexed, updated, skipped, and faile
   `index` is run
 - **THEN** every valid EPUB is indexed or skipped as applicable, the bad file is counted
   as failed, and the command exits successfully
+
+#### Scenario: A file that cannot be hashed is still indexed
+
+- **WHEN** an EPUB's metadata is extracted but its content hash cannot be computed
+- **THEN** it is stored with a `NULL` content hash, counted as indexed or updated, and
+  refreshed rather than skipped on every later run
 
 #### Scenario: Counts distinguish new from updated
 

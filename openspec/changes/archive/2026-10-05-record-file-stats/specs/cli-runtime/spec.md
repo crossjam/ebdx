@@ -23,5 +23,13 @@ files, updated files, and failures from skipped files.
 
 #### Scenario: A failed file is distinct from a skipped file
 
-- **WHEN** the index command cannot stat, extract, hash, or store one EPUB
+- **WHEN** the index command cannot read or extract metadata from one EPUB, cannot
+  store it, or finds that it changed while being read
 - **THEN** that file is counted as failed and is not included in the skipped count
+
+#### Scenario: A file without a content hash is never skipped
+
+- **WHEN** an EPUB's metadata can be extracted and stored but its content hash cannot be
+  computed
+- **THEN** it is reported as indexed or updated rather than failed, and every later run
+  refreshes it rather than reporting it as skipped
