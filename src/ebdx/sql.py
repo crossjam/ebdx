@@ -281,6 +281,72 @@ def query(
 
 @sql.command()
 @_database_option
+@click.argument("dbtable")
+@click.argument("q")
+@click.option("-o", "--order", help="Order by ('column' or 'column desc')")
+@click.option("-c", "--column", multiple=True, help="Column to return")
+@click.option("--limit", type=int, help="Number of rows to return")
+@click.option("--sql", "show_sql", is_flag=True, help="Show the SQL query that would be run")
+@click.option("--quote", is_flag=True, help="Apply FTS quoting rules to the search term")
+@_load_extension_option
+@_output_options
+@click.pass_context
+def search(
+    ctx, database, dbtable, q, order, column, limit, show_sql, quote, load_extension, **output
+):
+    """Execute a raw full-text search against an FTS table."""
+    return _invoke(
+        ctx,
+        "search",
+        database=database,
+        dbtable=dbtable,
+        q=q,
+        order=order,
+        column=column,
+        limit=limit,
+        show_sql=show_sql,
+        quote=quote,
+        load_extension=load_extension,
+        **output,
+    )
+
+
+@sql.command(name="analyze-tables")
+@_database_option
+@click.argument("tables", nargs=-1)
+@click.option("-c", "--column", multiple=True, help="Specific column to analyze")
+@click.option("--common-limit", type=int, default=10, help="How many common values")
+@click.option("--no-most", is_flag=True, help="Skip most common values")
+@click.option("--no-least", is_flag=True, help="Skip least common values")
+@_load_extension_option
+@click.pass_context
+def analyze_tables(
+    ctx,
+    database,
+    tables,
+    column,
+    common_limit,
+    no_most,
+    no_least,
+    load_extension,
+):
+    """Analyze table columns without saving results to the database."""
+    return _invoke(
+        ctx,
+        "analyze_tables",
+        database=database,
+        tables=tables,
+        columns=column,
+        save=False,
+        common_limit=common_limit,
+        no_most=no_most,
+        no_least=no_least,
+        load_extension=load_extension,
+    )
+
+
+@sql.command()
+@_database_option
 @click.option("--fts4", is_flag=True, help="Show only FTS4 tables")
 @click.option("--fts5", is_flag=True, help="Show only FTS5 tables")
 @click.option("--counts", is_flag=True, help="Include row counts")

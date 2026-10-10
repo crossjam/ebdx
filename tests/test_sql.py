@@ -75,6 +75,53 @@ def test_sql_query_supports_csv_and_named_parameters(runner, tmp_path, make_epub
     assert "Dune" in parameter_result.output
 
 
+def test_sql_search_supports_raw_fts_queries_and_output_options(runner, tmp_path, make_epub):
+    database = _index_library(runner, tmp_path, make_epub)
+
+    result = _sql(
+        runner,
+        database,
+        "search",
+        "books",
+        "Dune",
+        "--csv",
+        "--column",
+        "title",
+    )
+    quoted = _sql(runner, database, "search", "--quote", "books", "Dune")
+
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines() == ["title", "Dune"]
+    assert quoted.exit_code == 0, quoted.output
+    assert "Dune" in quoted.output
+
+
+def test_sql_analyze_tables_does_not_save_results(runner, tmp_path, make_epub):
+    database = _index_library(runner, tmp_path, make_epub)
+
+    result = _sql(runner, database, "analyze-tables", "books")
+
+    assert result.exit_code == 0, result.output
+    assert "title" in result.output
+    with sqlite3.connect(database) as connection:
+        assert (
+            connection.execute(
+                "select 1 from sqlite_master where name = '_analyze_tables'"
+            ).fetchone()
+            is None
+        )
+
+
+def test_sql_excludes_non_database_extras(runner):
+    result = runner.invoke(cli, ["sql", "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "search" in result.output
+    assert "analyze-tables" in result.output
+    assert "memory" not in result.output
+    assert "plugins" not in result.output
+
+
 def test_sql_database_option_works_after_the_subcommand(runner, tmp_path, make_epub):
     database = _index_library(runner, tmp_path, make_epub)
 

@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-10-10
+goal: Expose full-text search and saved-analysis-free table inspection while
+  keeping ebdx sql read-only

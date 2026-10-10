@@ -101,13 +101,16 @@ reads the query as an FTS5 expression instead of literal text ([search](#search)
 ### sql
 
 `ebdx sql` exposes the read-only sqlite-utils inspection commands `query`, `tables`,
-`views`, `schema`, `rows`, `indexes`, `triggers`, and `dump`. The database option can be
-placed on the group or after the SQL subcommand:
+`views`, `schema`, `rows`, `indexes`, `triggers`, `dump`, `search`, and
+`analyze-tables`. The database option can be placed on the group or after the SQL
+subcommand:
 
 ```console
 $ ebdx sql --database ~/library.db tables --counts
 $ ebdx sql --database ~/library.db query --csv "select title, path from books"
 $ ebdx sql query --csv --database ~/library.db "select title, path from books"
+$ ebdx sql search --csv books Dune
+$ ebdx sql analyze-tables books
 ```
 
 The group opens the database through SQLite’s read-only mode and rejects writes,
@@ -115,6 +118,11 @@ including writes to an attached database.
 `ebdx schema` remains the friendly Rich view; `ebdx sql schema` is the raw
 sqlite-utils-compatible schema output.
 A missing database is not created — run `ebdx index <directory>` first.
+`search` is the raw sqlite-utils FTS form and takes the content table, such as `books`;
+the top-level `ebdx search` remains the friendly literal-by-default command.
+`analyze-tables` never saves its results.
+The unrelated sqlite-utils `memory` and `plugins` commands are intentionally not exposed
+here.
 
 ### discover
 
