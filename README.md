@@ -81,6 +81,7 @@ A file that cannot be read is counted under `Failed` and the run continues.
 | `ebdx index ROOT` | Scan `ROOT` recursively, extract metadata, and store it |
 | `ebdx search QUERY` | Full-text search over indexed metadata (literal text; `--fts` for FTS5 syntax) |
 | `ebdx schema` | Print the tables, indexes, and triggers in the database |
+| `ebdx sql COMMAND` | Run a read-only sqlite-utils inspection command against the database |
 | `ebdx about` | Show version, summary, and where data is stored |
 | `ebdx version` | Print the version |
 
@@ -96,6 +97,23 @@ Command results are printed regardless.
 `index`, `search`, and `schema` accept `-d/--database PATH` to use a database other than
 the default. `search` also takes `-l/--limit N` (default 20) and `--fts`/`--raw`, which
 reads the query as an FTS5 expression instead of literal text ([search](#search)).
+
+### sql
+
+`ebdx sql` exposes the read-only sqlite-utils inspection commands `query`, `tables`,
+`views`, `schema`, `rows`, `indexes`, `triggers`, and `dump`. Put the group option
+before the SQL subcommand:
+
+```console
+$ ebdx sql --database ~/library.db tables --counts
+$ ebdx sql --database ~/library.db query --csv "select title, path from books"
+```
+
+The group opens the database through SQLite’s read-only mode and rejects writes,
+including writes to an attached database.
+`ebdx schema` remains the friendly Rich view; `ebdx sql schema` is the raw
+sqlite-utils-compatible schema output.
+A missing database is not created — run `ebdx index <directory>` first.
 
 ### discover
 
