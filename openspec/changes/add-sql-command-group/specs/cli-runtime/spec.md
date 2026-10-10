@@ -4,6 +4,8 @@
 
 The CLI SHALL provide an `sql` command group with a `--database/-d` option that defaults
 to the same database path used by the other database commands.
+The option SHALL be accepted either before the SQL subcommand or on the subcommand
+itself; a subcommand-level value SHALL take precedence.
 The group SHALL expose read-only sqlite-utils-compatible commands for `query`, `tables`,
 `views`, `schema`, `rows`, `indexes`, `triggers`, and `dump`. It SHALL support the
 shared output options `--nl`, `--arrays`, `--csv`, `--tsv`, `--no-headers`,

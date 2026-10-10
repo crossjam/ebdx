@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -41,7 +42,20 @@ def _load_extension_option(fn: Callable) -> Callable:
     )(fn)
 
 
-def _database(ctx: click.Context) -> Path:
+def _database_option(fn: Callable) -> Callable:
+    """Allow the database option before or after the SQL subcommand."""
+    return click.option(
+        "--database",
+        "-d",
+        type=click.Path(file_okay=True, dir_okay=False, path_type=Path),
+        default=None,
+        help="Database path (overrides the group option and default)",
+    )(fn)
+
+
+def _database(ctx: click.Context, database: Path | None = None) -> Path:
+    if database is not None:
+        return database
     obj = ctx.find_object(dict)
     if obj is None:
         raise click.UsageError("The sql command must run under the ebdx CLI group.")
@@ -73,6 +87,12 @@ def _quote_dump_value(value) -> str:
     if isinstance(value, str):
         escaped = value.replace("'", "''")
         return f"'{escaped}'"
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "NULL"
+        if math.isinf(value):
+            return "1e999" if value > 0 else "-1e999"
+        return repr(value)
     return str(value)
 
 
@@ -160,19 +180,19 @@ def _sqlite_utils_read_only(database: Path) -> Iterator:
         db.conn.close()
 
 
-def _invoke(ctx: click.Context, command_name: str, **kwargs):
+def _invoke(ctx: click.Context, command_name: str, *, database: Path | None = None, **kwargs):
     """Invoke one sqlite-utils command against the selected database."""
     import sqlite_utils.cli as sqlite_cli
 
-    database = _database(ctx)
-    _require_database(database)
+    selected_database = _database(ctx, database)
+    _require_database(selected_database)
     try:
-        with _sqlite_utils_read_only(database) as db:
+        with _sqlite_utils_read_only(selected_database) as db:
             if command_name == "dump":
                 db.iterdump = lambda: _safe_iterdump(db.conn)
             return ctx.invoke(
                 getattr(sqlite_cli, command_name),
-                path=str(database),
+                path=str(selected_database),
                 **kwargs,
             )
     except click.ClickException:
@@ -180,7 +200,7 @@ def _invoke(ctx: click.Context, command_name: str, **kwargs):
     except sqlite3.DatabaseError as error:
         from ebdx.cli import _abort_unusable_database
 
-        _abort_unusable_database(database, error)
+        _abort_unusable_database(selected_database, error)
 
 
 @click.group(
@@ -206,6 +226,7 @@ def sql(ctx: click.Context, database: Path | None):
 
 
 @sql.command()
+@_database_option
 @click.argument("sql")
 @click.option(
     "--attach",
@@ -232,6 +253,7 @@ def sql(ctx: click.Context, database: Path | None):
 @click.pass_context
 def query(
     ctx,
+    database,
     sql,
     attach,
     raw,
@@ -245,6 +267,7 @@ def query(
     return _invoke(
         ctx,
         "query",
+        database=database,
         sql=sql,
         attach=attach,
         raw=raw,
@@ -257,6 +280,7 @@ def query(
 
 
 @sql.command()
+@_database_option
 @click.option("--fts4", is_flag=True, help="Show only FTS4 tables")
 @click.option("--fts5", is_flag=True, help="Show only FTS5 tables")
 @click.option("--counts", is_flag=True, help="Include row counts")
@@ -265,11 +289,12 @@ def query(
 @_load_extension_option
 @_output_options
 @click.pass_context
-def tables(ctx, fts4, fts5, counts, columns, schema, load_extension, **output):
+def tables(ctx, database, fts4, fts5, counts, columns, schema, load_extension, **output):
     """List tables in the database."""
     return _invoke(
         ctx,
         "tables",
+        database=database,
         fts4=fts4,
         fts5=fts5,
         counts=counts,
@@ -281,17 +306,19 @@ def tables(ctx, fts4, fts5, counts, columns, schema, load_extension, **output):
 
 
 @sql.command()
+@_database_option
 @click.option("--counts", is_flag=True, help="Include row counts")
 @click.option("--columns", is_flag=True, help="Include columns")
 @click.option("--schema", is_flag=True, help="Include view schemas")
 @_load_extension_option
 @_output_options
 @click.pass_context
-def views(ctx, counts, columns, schema, load_extension, **output):
+def views(ctx, database, counts, columns, schema, load_extension, **output):
     """List views in the database."""
     return _invoke(
         ctx,
         "views",
+        database=database,
         counts=counts,
         columns=columns,
         schema=schema,
@@ -301,15 +328,17 @@ def views(ctx, counts, columns, schema, load_extension, **output):
 
 
 @sql.command()
+@_database_option
 @click.argument("tables", nargs=-1)
 @_load_extension_option
 @click.pass_context
-def schema(ctx, tables, load_extension):
+def schema(ctx, database, tables, load_extension):
     """Show the raw sqlite-utils schema."""
-    return _invoke(ctx, "schema", tables=tables, load_extension=load_extension)
+    return _invoke(ctx, "schema", database=database, tables=tables, load_extension=load_extension)
 
 
 @sql.command()
+@_database_option
 @click.argument("dbtable")
 @click.option("-c", "--column", multiple=True, help="Column to return")
 @click.option("--where", help="SQL WHERE clause")
@@ -320,11 +349,14 @@ def schema(ctx, tables, load_extension):
 @_load_extension_option
 @_output_options
 @click.pass_context
-def rows(ctx, dbtable, column, where, order, param, limit, offset, load_extension, **output):
+def rows(
+    ctx, database, dbtable, column, where, order, param, limit, offset, load_extension, **output
+):
     """Output rows from a table."""
     return _invoke(
         ctx,
         "rows",
+        database=database,
         dbtable=dbtable,
         column=column,
         where=where,
@@ -338,16 +370,18 @@ def rows(ctx, dbtable, column, where, order, param, limit, offset, load_extensio
 
 
 @sql.command()
+@_database_option
 @click.argument("tables", nargs=-1)
 @click.option("--aux", is_flag=True, help="Include auxiliary index columns")
 @_load_extension_option
 @_output_options
 @click.pass_context
-def indexes(ctx, tables, aux, load_extension, **output):
+def indexes(ctx, database, tables, aux, load_extension, **output):
     """Show indexes in the database."""
     return _invoke(
         ctx,
         "indexes",
+        database=database,
         tables=tables,
         aux=aux,
         load_extension=load_extension,
@@ -356,15 +390,17 @@ def indexes(ctx, tables, aux, load_extension, **output):
 
 
 @sql.command()
+@_database_option
 @click.argument("tables", nargs=-1)
 @_load_extension_option
 @_output_options
 @click.pass_context
-def triggers(ctx, tables, load_extension, **output):
+def triggers(ctx, database, tables, load_extension, **output):
     """Show triggers in the database."""
     return _invoke(
         ctx,
         "triggers",
+        database=database,
         tables=tables,
         load_extension=load_extension,
         **output,
@@ -372,8 +408,9 @@ def triggers(ctx, tables, load_extension, **output):
 
 
 @sql.command()
+@_database_option
 @_load_extension_option
 @click.pass_context
-def dump(ctx, load_extension):
+def dump(ctx, database, load_extension):
     """Dump the database as SQL without changing it."""
-    return _invoke(ctx, "dump", load_extension=load_extension)
+    return _invoke(ctx, "dump", database=database, load_extension=load_extension)

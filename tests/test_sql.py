@@ -75,6 +75,37 @@ def test_sql_query_supports_csv_and_named_parameters(runner, tmp_path, make_epub
     assert "Dune" in parameter_result.output
 
 
+def test_sql_database_option_works_after_the_subcommand(runner, tmp_path, make_epub):
+    database = _index_library(runner, tmp_path, make_epub)
+
+    schema = runner.invoke(cli, ["sql", "schema", "--database", str(database)])
+    query = runner.invoke(
+        cli,
+        ["sql", "query", "--csv", "--database", str(database), "select title from books"],
+    )
+
+    assert schema.exit_code == 0, schema.output
+    assert "CREATE TABLE" in schema.output
+    assert query.exit_code == 0, query.output
+    assert query.output.splitlines() == ["title", "Dune"]
+
+
+def test_sql_dump_restores_non_finite_float_values(runner, tmp_path, make_epub):
+    database = _index_library(runner, tmp_path, make_epub)
+    with sqlite3.connect(database) as connection:
+        connection.execute("create table special_numbers (value real)")
+        connection.execute("insert into special_numbers values (?)", (float("inf"),))
+
+    result = _sql(runner, database, "dump")
+    restored = tmp_path / "restored.db"
+    with sqlite3.connect(restored) as connection:
+        connection.executescript(result.output)
+        value = connection.execute("select value from special_numbers").fetchone()[0]
+
+    assert result.exit_code == 0, result.output
+    assert value == float("inf")
+
+
 def test_sql_query_rejects_writes_without_changing_the_database(runner, tmp_path, make_epub):
     database = _index_library(runner, tmp_path, make_epub)
     before = database.read_bytes()

@@ -1,7 +1,8 @@
 ## 1. Open the read-only SQL group
 
-- [x] 1.1 Add `ebdx sql --database/-d` with the default ebdx database path and help text
-  describing the `books` and `books_fts` tables.
+- [x] 1.1 Add `ebdx sql --database/-d` with the default ebdx database path, accept the
+  option after a subcommand too, and add help text describing the `books` and
+  `books_fts` tables.
 - [x] 1.2 Add shared output and `--load-extension` decorators plus wrappers for `query`,
   `tables`, `views`, `schema`, `rows`, `indexes`, `triggers`, and `dump`.
 - [x] 1.3 Reuse the existing top-level database path and unusable-database helpers.

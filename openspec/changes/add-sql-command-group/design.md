@@ -20,6 +20,11 @@ supplies ebdx’s already-open read-only Database whenever the callback opens th
 path. The original sqlite-utils factory is restored immediately after the callback, so
 the adapter does not change sqlite-utils behavior outside the command invocation.
 
+The database option is declared on both the group and each subcommand.
+This accepts the natural `ebdx sql --database library.db query ...` form as well as
+`ebdx sql query --database library.db ...`, while a subcommand-level value takes
+precedence when both are supplied.
+
 This preserves sqlite-utils' JSON, JSONL, CSV, TSV, table, and schema formatting,
 including its parameter handling and quoting behavior, without copying that
 implementation into ebdx.
