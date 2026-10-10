@@ -76,24 +76,41 @@ def test_sql_query_supports_csv_and_named_parameters(runner, tmp_path, make_epub
 
 
 def test_sql_search_supports_raw_fts_queries_and_output_options(runner, tmp_path, make_epub):
-    database = _index_library(runner, tmp_path, make_epub)
+    make_epub("library/dune.epub", title="Dune", author="World")
+    make_epub("library/dune-world.epub", title="Dune World", author="Frank Herbert")
+    database = tmp_path / "library.db"
+    result = runner.invoke(
+        cli,
+        ["index", str(tmp_path / "library"), "--database", str(database)],
+    )
+    assert result.exit_code == 0, result.output
 
-    result = _sql(
+    unquoted = _sql(
         runner,
         database,
         "search",
         "books",
-        "Dune",
+        "Dune OR World",
         "--csv",
         "--column",
         "title",
     )
-    quoted = _sql(runner, database, "search", "--quote", "books", "Dune")
+    quoted = _sql(
+        runner,
+        database,
+        "search",
+        "--quote",
+        "books",
+        "Dune OR World",
+        "--csv",
+        "--column",
+        "title",
+    )
 
-    assert result.exit_code == 0, result.output
-    assert result.output.splitlines() == ["title", "Dune"]
+    assert unquoted.exit_code == 0, unquoted.output
+    assert set(unquoted.output.splitlines()[1:]) == {"Dune", "Dune World"}
     assert quoted.exit_code == 0, quoted.output
-    assert "Dune" in quoted.output
+    assert quoted.output.splitlines() == ["title"]
 
 
 def test_sql_analyze_tables_does_not_save_results(runner, tmp_path, make_epub):
