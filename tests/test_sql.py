@@ -170,6 +170,28 @@ def test_sql_dump_restores_non_finite_float_values(runner, tmp_path, make_epub):
     assert value == float("inf")
 
 
+def test_sql_dump_restores_autoincrement_tables(runner, tmp_path, make_epub):
+    database = _index_library(runner, tmp_path, make_epub)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "create table sequence_values (id integer primary key autoincrement, value text)"
+        )
+        connection.execute("insert into sequence_values (value) values (?)", ("saved",))
+
+    result = _sql(runner, database, "dump")
+    restored = tmp_path / "restored-autoincrement.db"
+    with sqlite3.connect(restored) as connection:
+        connection.executescript(result.output)
+        row = connection.execute("select id, value from sequence_values").fetchone()
+        sequence = connection.execute(
+            "select seq from sqlite_sequence where name = 'sequence_values'"
+        ).fetchone()
+
+    assert result.exit_code == 0, result.output
+    assert row == (1, "saved")
+    assert sequence == (1,)
+
+
 def test_sql_query_rejects_writes_without_changing_the_database(runner, tmp_path, make_epub):
     database = _index_library(runner, tmp_path, make_epub)
     before = database.read_bytes()
@@ -201,6 +223,25 @@ def test_sql_query_rejects_writes_to_an_attached_database(runner, tmp_path, make
     assert "readonly" in result.output.lower()
     with sqlite3.connect(attached) as connection:
         assert connection.execute("select count(*) from records").fetchone()[0] == 0
+
+
+def test_sql_query_rejects_missing_attachment_without_creating_a_file(runner, tmp_path, make_epub):
+    database = _index_library(runner, tmp_path, make_epub)
+    attached = tmp_path / "missing.db"
+
+    result = _sql(
+        runner,
+        database,
+        "query",
+        "--attach",
+        "other",
+        str(attached),
+        "select 1",
+    )
+
+    assert result.exit_code != 0
+    assert "does not exist" in result.output.lower()
+    assert not attached.exists()
 
 
 def test_sql_missing_database_does_not_create_a_file(runner, tmp_path):

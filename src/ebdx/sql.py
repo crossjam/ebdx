@@ -119,7 +119,13 @@ def _safe_iterdump(connection: sqlite3.Connection) -> Iterator[str]:
     yield "PRAGMA foreign_keys=OFF;"
     yield "BEGIN TRANSACTION;"
     virtual_tables = []
+    sequence_rows = []
     for object_type, name, table_name, rootpage, sql in objects:
+        if object_type == "table" and name == "sqlite_sequence":
+            sequence_rows = connection.execute(
+                f"SELECT * FROM {_quote_dump_identifier(name)}"
+            ).fetchall()
+            continue
         if object_type == "table" and sql.lstrip().upper().startswith("CREATE VIRTUAL TABLE"):
             virtual_tables.append((name, table_name, rootpage, sql))
             continue
@@ -129,6 +135,12 @@ def _safe_iterdump(connection: sqlite3.Connection) -> Iterator[str]:
             for row in rows:
                 values = ",".join(_quote_dump_value(value) for value in row)
                 yield f"INSERT INTO {_quote_dump_identifier(name)} VALUES({values});"
+
+    if sequence_rows:
+        yield 'DELETE FROM "sqlite_sequence";'
+        for row in sequence_rows:
+            values = ",".join(_quote_dump_value(value) for value in row)
+            yield f'INSERT INTO "sqlite_sequence" VALUES({values});'
 
     if virtual_tables:
         yield "PRAGMA writable_schema=ON;"
@@ -230,7 +242,10 @@ def sql(ctx: click.Context, database: Path | None):
 @click.argument("sql")
 @click.option(
     "--attach",
-    type=(str, click.Path(file_okay=True, dir_okay=False, allow_dash=False)),
+    type=(
+        str,
+        click.Path(file_okay=True, dir_okay=False, allow_dash=False, exists=True),
+    ),
     multiple=True,
     help="Additional database to attach: ALIAS FILEPATH",
 )
