@@ -177,6 +177,8 @@ def test_sql_dump_restores_autoincrement_tables(runner, tmp_path, make_epub):
             "create table sequence_values (id integer primary key autoincrement, value text)"
         )
         connection.execute("insert into sequence_values (value) values (?)", ("saved",))
+        connection.execute("insert into sequence_values (id, value) values (?, ?)", (42, "deleted"))
+        connection.execute("delete from sequence_values where id = 42")
 
     result = _sql(runner, database, "dump")
     restored = tmp_path / "restored-autoincrement.db"
@@ -186,10 +188,15 @@ def test_sql_dump_restores_autoincrement_tables(runner, tmp_path, make_epub):
         sequence = connection.execute(
             "select seq from sqlite_sequence where name = 'sequence_values'"
         ).fetchone()
+        connection.execute("insert into sequence_values (value) values (?)", ("next",))
+        next_id = connection.execute(
+            "select id from sequence_values where value = 'next'"
+        ).fetchone()
 
     assert result.exit_code == 0, result.output
     assert row == (1, "saved")
-    assert sequence == (1,)
+    assert sequence == (42,)
+    assert next_id == (43,)
 
 
 def test_sql_query_rejects_writes_without_changing_the_database(runner, tmp_path, make_epub):
