@@ -15,12 +15,28 @@ from loguru import logger
 from platformdirs import user_data_dir
 from rich.console import Console
 
-from ebdx.progress import file_progress, log_sink, short_name, walk_progress
+from ebdx.output import Listing, emit, limit_option, output_format
+from ebdx.progress import diagnostic_console, file_progress, log_sink, short_name, walk_progress
 from ebdx.sql import sql as sql_group
 
 APP_NAME = "ebdx"
 APP_AUTHOR = "crossjam"
-console = Console()
+
+
+class ResultConsole(Console):
+    """Keep human reports on stderr when stdout is a structured payload."""
+
+    def print(self, *args, **kwargs):
+        if output_format() != "table":
+            return diagnostic_console().print(*args, **kwargs)
+        return super().print(*args, **kwargs)
+
+
+console = ResultConsole()
+SEARCH_FIELDS = ("id", "title", "author", "series", "series_index", "path")
+DISCOVERY_FIELDS = ("filename", "parent", "path")
+SCHEMA_FIELDS = ("name", "type", "sql")
+INDEX_FIELDS = ("total", "indexed", "updated", "skipped", "failed", "dry_run")
 
 
 def _configure_logging(*, verbose: bool, quiet: bool) -> None:
@@ -238,6 +254,10 @@ def _dry_run_index(
 
     stats = _inspect(database, plan_index, root, db, console, show_progress=show_progress)
 
+    if output_format() != "table":
+        emit([{**stats, "dry_run": True}], INDEX_FIELDS, single=True)
+        return
+
     console.print()
     console.print("[yellow]Dry run complete — no changes were made.[/yellow]")
     console.print(
@@ -297,8 +317,29 @@ def get_default_db_path() -> Path:
     is_flag=True,
     help="Report what would change without changing it. Give it before the command.",
 )
+@click.option(
+    "--format",
+    "result_format",
+    type=click.Choice(["table", "json", "jsonl", "csv"]),
+    default="table",
+    show_default=True,
+    help="Result format. Give it before the command.",
+)
+@click.option(
+    "--safe-csv/--no-safe-csv",
+    default=True,
+    show_default=True,
+    help="Escape formula-like CSV text; --no-safe-csv exports raw values. Requires --format csv.",
+)
 @click.pass_context
-def cli(ctx: click.Context, verbose: bool, quiet: bool, dry_run: bool):
+def cli(
+    ctx: click.Context,
+    verbose: bool,
+    quiet: bool,
+    dry_run: bool,
+    result_format: str,
+    safe_csv: bool,
+):
     """ebdx - eBook Database tool.
 
     Index and search EPUB metadata from your personal library.
@@ -308,13 +349,28 @@ def cli(ctx: click.Context, verbose: bool, quiet: bool, dry_run: bool):
     # order-independent; subcommands read them with @click.pass_context.
     # ``quiet`` rides along because it decides more than the log level now: it
     # also suppresses the progress display.
-    ctx.ensure_object(dict).update({"dry_run": dry_run, "quiet": quiet})
+    ctx.ensure_object(dict).update(
+        {
+            "dry_run": dry_run,
+            "quiet": quiet,
+            "format": result_format,
+            "safe_csv": safe_csv,
+        }
+    )
+    if (
+        ctx.get_parameter_source("safe_csv") == click.core.ParameterSource.COMMANDLINE
+        and result_format != "csv"
+    ):
+        raise click.UsageError("--safe-csv/--no-safe-csv requires --format csv.")
+    if ctx.invoked_subcommand == "sql" and result_format != "table":
+        raise click.UsageError("sql uses native format options: --csv, --nl, or --table.")
 
 
 @cli.command()
 @click.argument("paths", nargs=-1, type=click.Path(exists=True, path_type=Path))
+@limit_option
 @click.pass_context
-def discover(ctx: click.Context, paths: tuple[Path, ...]):
+def discover(ctx: click.Context, paths: tuple[Path, ...], limit: int):
     """Recursively find and list EPUB files.
 
     Scans the specified PATHS for .epub files and displays them in a table.
@@ -339,6 +395,18 @@ def discover(ctx: click.Context, paths: tuple[Path, ...]):
             ) as walked:
                 epub_files.extend(walked)
 
+    listing = Listing.bounded(epub_files, limit)
+    if output_format() != "table":
+        listing.notice()
+        emit(
+            [
+                {"filename": p.name, "parent": str(p.resolve().parent), "path": str(p.resolve())}
+                for p in listing.rows
+            ],
+            DISCOVERY_FIELDS,
+        )
+        return
+
     if not epub_files:
         console.print("[yellow]No EPUB files discovered.[/yellow]")
         return
@@ -346,14 +414,14 @@ def discover(ctx: click.Context, paths: tuple[Path, ...]):
     from rich.table import Table
     from rich.text import Text
 
-    table = Table(title=f"Discovered {len(epub_files)} EPUB file(s)")
+    table = Table(title=listing.title(f"Discovered {len(epub_files)} EPUB file(s)"))
     table.add_column("Filename", style="cyan")
     table.add_column("Path", style="magenta")
 
     # Building the table is a row per file, which on a large library is long
     # enough to be worth reporting -- and by now the total is known, so this
     # half of the display is a real position rather than a pulse.
-    with file_progress(epub_files, "Listing files", enabled=show_progress) as tracked:
+    with file_progress(listing.rows, "Listing files", enabled=show_progress) as tracked:
         for epub in tracked:
             # Wrapped as Text, not passed as strings: a real filename may
             # contain square brackets, and Rich would read those as markup
@@ -406,6 +474,10 @@ def index(ctx: click.Context, root: Path, database):
     db = _open_database(database)
     stats = scan_and_index(root, db, console, show_progress=show_progress)
 
+    if output_format() != "table":
+        emit([{**stats, "dry_run": False}], INDEX_FIELDS, single=True)
+        return
+
     console.print()
     console.print("[green]Indexing complete![/green]")
 
@@ -431,14 +503,7 @@ def index(ctx: click.Context, root: Path, database):
     default=None,
     help="Database path (default: XDG data directory)",
 )
-@click.option(
-    "--limit",
-    "-l",
-    type=int,
-    default=20,
-    show_default=True,
-    help="Maximum number of results to return",
-)
+@limit_option
 @click.option(
     "--fts",
     "--raw",
@@ -450,7 +515,7 @@ def index(ctx: click.Context, root: Path, database):
 def search(ctx: click.Context, query: str, database, limit: int, fts: bool):
     """Search for indexed eBooks using full-text search.
 
-    Searches across title, author, and series fields using SQLite FTS5.
+    Searches across title, author, series, and tags using SQLite FTS5.
 
     QUERY is literal text: its words are searched for together, and any
     punctuation in it -- an apostrophe, a hyphen, a comma -- is part of the
@@ -465,7 +530,7 @@ def search(ctx: click.Context, query: str, database, limit: int, fts: bool):
         ebdx search "Asimov" --limit 10
         ebdx search --fts "title:Dune NOT series:Chronicles"
     """
-    from ebdx.db import InvalidQueryError, search_books, validate_query
+    from ebdx.db import InvalidQueryError, count_search_books, search_books, validate_query
 
     if database is None:
         database = get_default_db_path()
@@ -515,10 +580,13 @@ def search(ctx: click.Context, query: str, database, limit: int, fts: bool):
                 "[yellow]No results can be shown: the rebuild discards everything "
                 "stored now, and the library must be re-indexed first.[/yellow]"
             )
+            if output_format() != "table":
+                emit([], SEARCH_FIELDS)
             return
         repairable = _inspect(database, would_repair_search, db)
     try:
         results = search_books(db, query, limit=limit, fts=fts)
+        total = count_search_books(db, query, fts=fts)
     except InvalidQueryError as e:  # pragma: no cover - settled above
         _abort_invalid_query(e)
     except sqlite3.DatabaseError as e:
@@ -529,6 +597,8 @@ def search(ctx: click.Context, query: str, database, limit: int, fts: bool):
             # -- a layout left untouched, an unrecognised one -- is a genuine
             # database error and falls through to the message below.
             console.print(f"[yellow]The search cannot run until that happens:[/yellow] {e}")
+            if output_format() != "table":
+                emit([], SEARCH_FIELDS)
             return
         # search_books validates the query first, so reaching here means the
         # database cannot serve the search: a locked file, a corrupt index,
@@ -542,13 +612,19 @@ def search(ctx: click.Context, query: str, database, limit: int, fts: bool):
         )
         raise click.Abort() from e
 
+    listing = Listing.bounded(results, limit, total=total)
+    if output_format() != "table":
+        listing.notice()
+        emit(listing.rows, SEARCH_FIELDS)
+        return
+
     if not results:
         console.print("[yellow]No results found.[/yellow]")
         return
 
     from rich.table import Table
 
-    table = Table(title=f"Search Results ({len(results)} found)")
+    table = Table(title=listing.title(f"Search Results ({len(results)} found)"))
     table.add_column("Title", style="cyan")
     table.add_column("Author", style="magenta")
     table.add_column("Series", style="green")
@@ -593,6 +669,8 @@ def schema(ctx: click.Context, database):
     if not Path(database).exists():
         console.print(f"[red]No database found at:[/red] {database}")
         console.print("[yellow]Run 'ebdx index <directory>' to create a database first.[/yellow]")
+        if output_format() != "table":
+            raise click.Abort()
         return
 
     db = _open_database(database, read_only=dry_run)
@@ -607,11 +685,17 @@ def schema(ctx: click.Context, database):
     table.add_column("Type", style="magenta")
     table.add_column("SQL", style="white")
 
-    results = db.execute(
+    results = _inspect(
+        database,
+        db.execute,
         "SELECT name, type, sql FROM sqlite_master "
         "WHERE type IN ('table','index','trigger') "
-        "ORDER BY type, name"
+        "ORDER BY type, name",
     ).fetchall()
+
+    if output_format() != "table":
+        emit([dict(zip(SCHEMA_FIELDS, row, strict=True)) for row in results], SCHEMA_FIELDS)
+        return
 
     for name, typ, sql_text in results:
         table.add_row(name, typ, sql_text or "")
@@ -628,6 +712,23 @@ def about():
     summary, repo_url = _parse_pkg_metadata()
     data_dir = get_data_dir()
     db_path = get_default_db_path()
+
+    if output_format() != "table":
+        fields = ("version", "summary", "repository", "data_directory", "database")
+        emit(
+            [
+                dict(
+                    zip(
+                        fields,
+                        (_get_pkg_version(), summary, repo_url, str(data_dir), str(db_path)),
+                        strict=True,
+                    )
+                )
+            ],
+            fields,
+            single=True,
+        )
+        return
 
     lines = [
         "ebdx",
@@ -646,7 +747,10 @@ def about():
 @cli.command()
 def version():
     """Display the ebdx version."""
-    console.print(f"ebdx, version {_get_pkg_version()}")
+    if output_format() != "table":
+        emit([{"version": _get_pkg_version()}], ("version",), single=True)
+    else:
+        console.print(f"ebdx, version {_get_pkg_version()}")
 
 
 cli.add_command(sql_group)
