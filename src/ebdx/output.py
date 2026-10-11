@@ -57,8 +57,22 @@ def emit(records: list[dict], fields: tuple[str, ...], *, single: bool = False) 
         for row in records:
             click.echo(json.dumps(row, ensure_ascii=False))
     elif fmt == "csv":
+        ctx = click.get_current_context()
+        if (ctx.find_object(dict) or {}).get("safe_csv"):
+            records = [
+                {key: _spreadsheet_cell(value) for key, value in row.items()} for row in records
+            ]
         buffer = io.StringIO(newline="")
         writer = csv.DictWriter(buffer, fieldnames=fields)
         writer.writeheader()
         writer.writerows(records)
         click.echo(buffer.getvalue(), nl=False)
+
+
+def _spreadsheet_cell(value):
+    """Escape formula prefixes and leading control characters in text cells."""
+    if isinstance(value, str) and (
+        value.startswith(("\t", "\r", "\n")) or value.lstrip().startswith(("=", "+", "-", "@"))
+    ):
+        return "'" + value
+    return value

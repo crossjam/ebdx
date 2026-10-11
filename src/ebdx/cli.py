@@ -325,8 +325,20 @@ def get_default_db_path() -> Path:
     show_default=True,
     help="Result format. Give it before the command.",
 )
+@click.option(
+    "--safe-csv",
+    is_flag=True,
+    help="Prefix formula-like text cells with an apostrophe. Requires --format csv.",
+)
 @click.pass_context
-def cli(ctx: click.Context, verbose: bool, quiet: bool, dry_run: bool, result_format: str):
+def cli(
+    ctx: click.Context,
+    verbose: bool,
+    quiet: bool,
+    dry_run: bool,
+    result_format: str,
+    safe_csv: bool,
+):
     """ebdx - eBook Database tool.
 
     Index and search EPUB metadata from your personal library.
@@ -336,7 +348,16 @@ def cli(ctx: click.Context, verbose: bool, quiet: bool, dry_run: bool, result_fo
     # order-independent; subcommands read them with @click.pass_context.
     # ``quiet`` rides along because it decides more than the log level now: it
     # also suppresses the progress display.
-    ctx.ensure_object(dict).update({"dry_run": dry_run, "quiet": quiet, "format": result_format})
+    ctx.ensure_object(dict).update(
+        {
+            "dry_run": dry_run,
+            "quiet": quiet,
+            "format": result_format,
+            "safe_csv": safe_csv,
+        }
+    )
+    if safe_csv and result_format != "csv":
+        raise click.UsageError("--safe-csv requires --format csv.")
     if ctx.invoked_subcommand == "sql" and result_format != "table":
         raise click.UsageError("sql uses native format options: --csv, --nl, or --table.")
 

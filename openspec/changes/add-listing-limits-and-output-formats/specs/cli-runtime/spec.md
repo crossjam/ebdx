@@ -21,6 +21,15 @@ Errors SHALL exit non-zero.
 - **THEN** JSON emits an empty array, JSONL emits no records, CSV emits only its header,
   and the command exits successfully
 
+#### Scenario: Spreadsheet-oriented CSV exports
+
+- **WHEN** a caller selects `--format csv --safe-csv`
+- **THEN** formula-like string cells beginning with `=`, `+`, `-`, or `@`, including
+  after leading whitespace, and strings beginning with tab, carriage return, or newline
+  are prefixed with an apostrophe
+- **AND** numeric values and nulls retain their usual serialization
+- **AND** ordinary CSV output preserves original string values
+
 #### Scenario: Dry-run output remains parseable
 
 - **WHEN** a supported command runs with a structured format and `--dry-run`

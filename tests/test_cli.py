@@ -224,6 +224,58 @@ def test_global_format_does_not_replace_sql_formats(runner, tmp_path):
     assert not result.stdout
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "=1+1",
+        "+formula",
+        "-formula",
+        "@formula",
+        "  =formula",
+        "\tformula",
+        "\rformula",
+        "\nformula",
+    ],
+)
+def test_safe_csv_protects_text_without_changing_raw_csv(runner, tmp_path, text):
+    from ebdx.db import get_database, save_book
+
+    db_path = tmp_path / "library.db"
+    db = get_database(str(db_path))
+    save_book(
+        db,
+        {
+            "path": str(tmp_path / "book.epub"),
+            "title": text,
+            "author": "Writer",
+            "series_index": -1.5,
+        },
+    )
+    db.conn.close()
+    args = ["search", "Writer", "-d", str(db_path)]
+    raw = _parse_records(runner.invoke(cli, ["--format", "csv", *args]), "csv")[0]
+    safe = _parse_records(runner.invoke(cli, ["--format", "csv", "--safe-csv", *args]), "csv")[0]
+    assert raw["title"] == text
+    assert safe["title"] == "'" + text
+    assert safe["author"] == raw["author"] == "Writer"
+    assert safe["series"] == raw["series"] == ""
+    assert safe["series_index"] == raw["series_index"] == "-1.5"
+
+
+def test_safe_csv_discovery_filename(runner, tmp_path):
+    (tmp_path / "=1+1.epub").touch()
+    result = runner.invoke(cli, ["--format", "csv", "--safe-csv", "discover", str(tmp_path)])
+    assert _parse_records(result, "csv")[0]["filename"] == "'=1+1.epub"
+
+
+@pytest.mark.parametrize("fmt", ["table", "json", "jsonl"])
+def test_safe_csv_requires_csv(runner, fmt):
+    result = runner.invoke(cli, ["--format", fmt, "--safe-csv", "version"])
+    assert result.exit_code == 2
+    assert not result.stdout
+    assert "requires --format csv" in result.stderr
+
+
 @pytest.mark.parametrize("fmt", ["json", "jsonl", "csv"])
 def test_structured_search_query_errors_and_dry_run(runner, tmp_path, make_epub, fmt):
     db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Volume", "author": "Writer"}])
