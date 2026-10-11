@@ -33,6 +33,11 @@ A shared serializer writes directly through Click rather than Rich.
 JSON emits one array for listings and one object for summaries and informational
 commands. JSONL emits one object per record.
 CSV has a stable header and uses the standard library writer.
+CSV defaults to `--safe-csv`, which apostrophe-prefixes formula-like text and leading
+tab, carriage return, or newline cells.
+`--no-safe-csv` preserves raw strings for exact-value exports.
+Explicit safety flags require CSV; the default does not affect other formats or SQL’s
+native output options.
 Empty listings are `[]`, zero JSONL lines, or header-only CSV. Nulls become JSON null
 and empty CSV cells; numbers stay numeric in JSON.
 

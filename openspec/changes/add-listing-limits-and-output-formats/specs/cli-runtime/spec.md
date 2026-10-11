@@ -23,12 +23,12 @@ Errors SHALL exit non-zero.
 
 #### Scenario: Spreadsheet-oriented CSV exports
 
-- **WHEN** a caller selects `--format csv --safe-csv`
+- **WHEN** a caller selects `--format csv`, with or without explicit `--safe-csv`
 - **THEN** formula-like string cells beginning with `=`, `+`, `-`, or `@`, including
   after leading whitespace, and strings beginning with tab, carriage return, or newline
   are prefixed with an apostrophe
 - **AND** numeric values and nulls retain their usual serialization
-- **AND** ordinary CSV output preserves original string values
+- **AND** `--format csv --no-safe-csv` preserves original string values
 
 #### Scenario: Dry-run output remains parseable
 

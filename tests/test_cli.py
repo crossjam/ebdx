@@ -237,7 +237,8 @@ def test_global_format_does_not_replace_sql_formats(runner, tmp_path):
         "\nformula",
     ],
 )
-def test_safe_csv_protects_text_without_changing_raw_csv(runner, tmp_path, text):
+@pytest.mark.parametrize("safety_flags", [[], ["--safe-csv"]])
+def test_safe_csv_protects_text_without_changing_raw_csv(runner, tmp_path, text, safety_flags):
     from ebdx.db import get_database, save_book
 
     db_path = tmp_path / "library.db"
@@ -253,8 +254,8 @@ def test_safe_csv_protects_text_without_changing_raw_csv(runner, tmp_path, text)
     )
     db.conn.close()
     args = ["search", "Writer", "-d", str(db_path)]
-    raw = _parse_records(runner.invoke(cli, ["--format", "csv", *args]), "csv")[0]
-    safe = _parse_records(runner.invoke(cli, ["--format", "csv", "--safe-csv", *args]), "csv")[0]
+    raw = _parse_records(runner.invoke(cli, ["--format", "csv", "--no-safe-csv", *args]), "csv")[0]
+    safe = _parse_records(runner.invoke(cli, ["--format", "csv", *safety_flags, *args]), "csv")[0]
     assert raw["title"] == text
     assert safe["title"] == "'" + text
     assert safe["author"] == raw["author"] == "Writer"
@@ -264,13 +265,14 @@ def test_safe_csv_protects_text_without_changing_raw_csv(runner, tmp_path, text)
 
 def test_safe_csv_discovery_filename(runner, tmp_path):
     (tmp_path / "=1+1.epub").touch()
-    result = runner.invoke(cli, ["--format", "csv", "--safe-csv", "discover", str(tmp_path)])
+    result = runner.invoke(cli, ["--format", "csv", "discover", str(tmp_path)])
     assert _parse_records(result, "csv")[0]["filename"] == "'=1+1.epub"
 
 
 @pytest.mark.parametrize("fmt", ["table", "json", "jsonl"])
-def test_safe_csv_requires_csv(runner, fmt):
-    result = runner.invoke(cli, ["--format", fmt, "--safe-csv", "version"])
+@pytest.mark.parametrize("flag", ["--safe-csv", "--no-safe-csv"])
+def test_safe_csv_requires_csv(runner, fmt, flag):
+    result = runner.invoke(cli, ["--format", fmt, flag, "version"])
     assert result.exit_code == 2
     assert not result.stdout
     assert "requires --format csv" in result.stderr

@@ -58,7 +58,7 @@ def emit(records: list[dict], fields: tuple[str, ...], *, single: bool = False) 
             click.echo(json.dumps(row, ensure_ascii=False))
     elif fmt == "csv":
         ctx = click.get_current_context()
-        if (ctx.find_object(dict) or {}).get("safe_csv"):
+        if (ctx.find_object(dict) or {}).get("safe_csv", True):
             records = [
                 {key: _spreadsheet_cell(value) for key, value in row.items()} for row in records
             ]

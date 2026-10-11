@@ -121,15 +121,16 @@ Values retain their full text, including long paths, quotes, commas, and newline
 JSON keeps numbers and nulls; CSV has a header and empty cells for null values.
 Empty listings emit `[]` in JSON, no lines in JSONL, and just the header in CSV.
 
-For spreadsheet imports, use `ebdx --format csv --safe-csv search Herbert`. Spreadsheet
-software can interpret text beginning with `=`, `+`, `-`, or `@` as a formula.
-`--safe-csv` prefixes these strings (including after leading whitespace) and strings
-beginning with a tab, carriage return, or newline with an apostrophe.
-This changes the exported cell text; ordinary CSV preserves exact values for
-programmatic round trips.
-Numeric values and nulls keep their usual serialization.
-The option goes before the command, requires `--format csv`, and applies to ebdx’s
-friendly commands.
+CSV exports enable `--safe-csv` by default.
+Spreadsheet software can interpret text beginning with `=`, `+`, `-`, or `@` as a
+formula. `--safe-csv` prefixes these strings (including after leading whitespace) and
+strings beginning with a tab, carriage return, or newline with an apostrophe.
+This changes the exported cell text.
+For exact values in programmatic round trips, use
+`ebdx --format csv --no-safe-csv search Herbert`. Numeric values and nulls keep their
+usual serialization.
+Explicit `--safe-csv` or `--no-safe-csv` goes before the command, requires
+`--format csv`, and applies to ebdx’s friendly commands.
 
 | Command | Record fields |
 | --- | --- |

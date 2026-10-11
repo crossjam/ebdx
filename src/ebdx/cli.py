@@ -326,9 +326,10 @@ def get_default_db_path() -> Path:
     help="Result format. Give it before the command.",
 )
 @click.option(
-    "--safe-csv",
-    is_flag=True,
-    help="Prefix formula-like text cells with an apostrophe. Requires --format csv.",
+    "--safe-csv/--no-safe-csv",
+    default=True,
+    show_default=True,
+    help="Escape formula-like CSV text; --no-safe-csv exports raw values. Requires --format csv.",
 )
 @click.pass_context
 def cli(
@@ -356,8 +357,11 @@ def cli(
             "safe_csv": safe_csv,
         }
     )
-    if safe_csv and result_format != "csv":
-        raise click.UsageError("--safe-csv requires --format csv.")
+    if (
+        ctx.get_parameter_source("safe_csv") == click.core.ParameterSource.COMMANDLINE
+        and result_format != "csv"
+    ):
+        raise click.UsageError("--safe-csv/--no-safe-csv requires --format csv.")
     if ctx.invoked_subcommand == "sql" and result_format != "table":
         raise click.UsageError("sql uses native format options: --csv, --nl, or --table.")
 
