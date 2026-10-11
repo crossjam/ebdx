@@ -9,6 +9,9 @@ real user data directory.
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 import sqlite3
 import sys
 
@@ -23,6 +26,260 @@ from ebdx.db import AddedColumn, Migration
 from ebdx.scanner import iter_files
 
 _TEXT_COLUMN = AddedColumn(str, not_null=True, default="")
+
+
+def _parse_records(result, fmt, *, single=False):
+    assert result.exit_code == 0, result.output
+    if fmt == "json":
+        payload = json.loads(result.stdout)
+        return [payload] if single else payload
+    if fmt == "jsonl":
+        return [json.loads(line) for line in result.stdout.splitlines()]
+    return list(csv.DictReader(io.StringIO(result.stdout)))
+
+
+@pytest.mark.parametrize("fmt", ["table", "json", "jsonl", "csv"])
+@pytest.mark.parametrize("limit,expected", [(None, 20), (3, 3), (0, 25)])
+@pytest.mark.parametrize("command", ["discover", "search"])
+def test_shared_listing_limits(runner, tmp_path, fmt, limit, expected, command):
+    from ebdx.db import get_database, save_book
+
+    library = tmp_path / "books"
+    library.mkdir()
+    db_path = tmp_path / "library.db"
+    db = get_database(str(db_path))
+    for i in range(25):
+        path = library / f"volume{i:02}.epub"
+        path.touch()
+        save_book(db, {"path": str(path), "title": f"Volume {i}", "author": "Writer"})
+    db.conn.close()
+    args = ["--format", fmt, command]
+    args += [str(library)] if command == "discover" else ["Volume", "-d", str(db_path)]
+    if limit is not None:
+        args += ["-l", str(limit)]
+    result = runner.invoke(cli, args)
+    assert result.exit_code == 0, result.output
+    if fmt == "table":
+        if expected < 25:
+            assert f"Showing {expected} of 25" in result.stdout
+        else:
+            assert "Showing" not in result.stdout
+        assert not result.stderr
+    else:
+        assert len(_parse_records(result, fmt)) == expected
+        assert (f"Showing {expected} of 25" in result.stderr) == (expected < 25)
+
+
+@pytest.mark.parametrize("command", ["discover", "search"])
+def test_negative_shared_limit_does_no_work(runner, tmp_path, command):
+    args = [command, str(tmp_path) if command == "discover" else "anything", "-l", "-1"]
+    result = runner.invoke(cli, args)
+    assert result.exit_code == 2
+    assert "Invalid value" in result.stderr
+    assert not result.stdout
+
+
+@pytest.mark.parametrize("fmt", ["json", "jsonl", "csv"])
+def test_structured_commands_roundtrip(runner, tmp_path, make_epub, fmt):
+    from ebdx.db import get_database, save_book
+
+    title = 'Volume, "quoted"\nnext line [brackets]'
+    path = tmp_path / ("long-" * 35 + ',"quoted"\n.epub')
+    make_epub(path.name, title="Volume", author="Writer")
+    db_path = tmp_path / "library.db"
+    result = runner.invoke(cli, ["--format", fmt, "index", str(tmp_path), "-d", str(db_path)])
+    summary = _parse_records(result, fmt, single=True)[0]
+    assert int(summary["indexed"]) == 1
+    assert int(summary["skipped"]) == 0
+    assert "Found 1" in result.stderr
+
+    # Save the exact text directly: EPUB writers can normalize XML whitespace.
+    db = get_database(str(db_path))
+    save_book(db, {"path": str(path), "title": title, "author": "Writer"})
+    db.conn.close()
+    records = _parse_records(
+        runner.invoke(
+            cli,
+            [
+                "--format",
+                fmt,
+                "search",
+                "Volume",
+                "-d",
+                str(db_path),
+            ],
+        ),
+        fmt,
+    )
+    assert records[0]["title"] == title
+    assert records[0]["path"] == str(path)
+    assert records[0]["series_index"] == ("" if fmt == "csv" else None)
+    assert "id" in records[0]
+
+    discovered = _parse_records(
+        runner.invoke(
+            cli,
+            [
+                "--format",
+                fmt,
+                "discover",
+                str(tmp_path),
+            ],
+        ),
+        fmt,
+    )
+    assert discovered == [{"filename": path.name, "parent": str(tmp_path), "path": str(path)}]
+    schema = _parse_records(
+        runner.invoke(
+            cli,
+            [
+                "--format",
+                fmt,
+                "schema",
+                "-d",
+                str(db_path),
+            ],
+        ),
+        fmt,
+    )
+    assert any(row["name"] == "books" and "CREATE TABLE" in row["sql"] for row in schema)
+    about = _parse_records(runner.invoke(cli, ["--format", fmt, "about"]), fmt, single=True)[0]
+    version = _parse_records(runner.invoke(cli, ["--format", fmt, "version"]), fmt, single=True)[0]
+    assert about["version"] == version["version"]
+
+
+@pytest.mark.parametrize("fmt", ["json", "jsonl", "csv"])
+@pytest.mark.parametrize("query,fts", [("absent", False), ("   ", False), ("title:absent", True)])
+def test_structured_empty_listings(runner, tmp_path, fmt, query, fts):
+    from ebdx.db import get_database
+
+    db_path = tmp_path / "library.db"
+    get_database(str(db_path)).conn.close()
+    args = ["--format", fmt, "search", query, "-d", str(db_path)]
+    if fts:
+        args += ["--fts"]
+    assert _parse_records(runner.invoke(cli, args), fmt) == []
+    assert (
+        _parse_records(runner.invoke(cli, ["--format", fmt, "discover", str(tmp_path)]), fmt) == []
+    )
+
+
+@pytest.mark.parametrize("fmt", ["json", "jsonl", "csv"])
+@pytest.mark.parametrize("command", ["index", "search", "schema"])
+def test_structured_errors_only_on_stderr(runner, tmp_path, fmt, command):
+    missing = tmp_path / "missing.db"
+    args = ["--format", fmt, command]
+    args += [str(tmp_path)] if command == "index" else ["Volume"] if command == "search" else []
+    args += ["-d", str(missing)]
+    if command == "index":
+        missing.write_bytes(b"corrupt database")
+    result = runner.invoke(cli, args)
+    assert result.exit_code != 0
+    assert not result.stdout
+    assert "database" in result.stderr
+
+
+@pytest.mark.parametrize("fmt", ["json", "jsonl", "csv"])
+@pytest.mark.parametrize("verbosity", [[], ["--quiet"], ["--verbose"]])
+def test_structured_index_dry_run_and_incremental(runner, tmp_path, make_epub, fmt, verbosity):
+    make_epub("books/a.epub", title="Volume", author="Writer")
+    (tmp_path / "books" / "bad.epub").write_text("broken")
+    db_path = tmp_path / "library.db"
+    args = [*verbosity, "--format", fmt, "index", str(tmp_path / "books"), "-d", str(db_path)]
+    planned = _parse_records(runner.invoke(cli, ["--dry-run", *args]), fmt, single=True)[0]
+    assert not db_path.exists()
+    assert int(planned["failed"]) == 1
+    assert planned["dry_run"] == ("True" if fmt == "csv" else True)
+    actual = _parse_records(runner.invoke(cli, args), fmt, single=True)[0]
+    assert actual["dry_run"] == ("False" if fmt == "csv" else False)
+    before = db_path.read_bytes(), db_path.stat().st_mtime_ns
+    second = _parse_records(runner.invoke(cli, ["--dry-run", *args]), fmt, single=True)[0]
+    assert int(second["skipped"]) == 1
+    assert (db_path.read_bytes(), db_path.stat().st_mtime_ns) == before
+    assert int(_parse_records(runner.invoke(cli, args), fmt, single=True)[0]["skipped"]) == 1
+
+
+@pytest.mark.parametrize("fmt", ["json", "jsonl", "csv"])
+def test_structured_search_pending_repair(runner, tmp_path, make_epub, fmt):
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Volume", "author": "Writer"}])
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TABLE books_fts")
+    before = db_path.read_bytes()
+    args = ["--dry-run", "--format", fmt, "search", "Volume", "-d", str(db_path)]
+    result = runner.invoke(cli, args)
+    assert _parse_records(result, fmt) == []
+    assert "Would:" in result.stderr
+    assert "cannot run" in result.stderr
+    assert db_path.read_bytes() == before
+    result = runner.invoke(cli, ["--dry-run", "--format", fmt, "schema", "-d", str(db_path)])
+    assert _parse_records(result, fmt)
+    assert "Would:" in result.stderr
+    assert db_path.read_bytes() == before
+
+
+def test_global_format_does_not_replace_sql_formats(runner, tmp_path):
+    result = runner.invoke(cli, ["--format", "json", "sql", "tables"])
+    assert result.exit_code == 2
+    assert "native format options" in result.stderr
+    assert not result.stdout
+
+
+@pytest.mark.parametrize("fmt", ["json", "jsonl", "csv"])
+def test_structured_search_query_errors_and_dry_run(runner, tmp_path, make_epub, fmt):
+    db_path = _index_library(runner, tmp_path, make_epub, [{"title": "Volume", "author": "Writer"}])
+    before = db_path.read_bytes()
+    result = runner.invoke(
+        cli,
+        [
+            "--format",
+            fmt,
+            "search",
+            '"unclosed',
+            "--fts",
+            "-d",
+            str(db_path),
+        ],
+    )
+    assert result.exit_code != 0
+    assert not result.stdout
+    assert "Invalid search query" in result.stderr
+    result = runner.invoke(
+        cli,
+        [
+            "--dry-run",
+            "--format",
+            fmt,
+            "search",
+            "title:Volume",
+            "--fts",
+            "-d",
+            str(db_path),
+        ],
+    )
+    assert len(_parse_records(result, fmt)) == 1
+    assert "DRY RUN" in result.stderr
+    assert db_path.read_bytes() == before
+
+
+def test_search_count_matches_result_semantics(tmp_path):
+    from ebdx.db import count_search_books, get_database, save_book, search_books
+
+    db = get_database(str(tmp_path / "library.db"))
+    for i in range(25):
+        save_book(db, {"path": f"/books/{i}.epub", "title": f"Volume {i}", "author": "Writer"})
+    for query, fts, count in [
+        ("Volume Writer", False, 25),
+        ("title:Volume", True, 25),
+        ("absent", False, 0),
+        ("   ", False, 0),
+    ]:
+        assert count_search_books(db, query, fts=fts) == count
+        assert len(search_books(db, query, limit=0, fts=fts)) == count
+    assert len(search_books(db, "Volume")) == 20
+    assert search_books(db, "Volume", limit=3) == search_books(db, "Volume", limit=0)[:3]
+    with pytest.raises(ValueError):
+        search_books(db, "Volume", limit=-1)
+    db.conn.close()
 
 
 @pytest.fixture(autouse=True)

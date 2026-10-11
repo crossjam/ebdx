@@ -90,13 +90,56 @@ Global options, which go before the subcommand:
 - `-v`, `--verbose` — show informational logs (database opens, index rebuilds)
 - `-q`, `--quiet` — errors only
 - `--dry-run` — report what would change, and change nothing ([Dry run](#dry-run))
+- `--format {table,json,jsonl,csv}` — select result output (default `table`)
 
 By default only warnings and errors are logged.
 Command results are printed regardless.
 
 `index`, `search`, and `schema` accept `-d/--database PATH` to use a database other than
-the default. `search` also takes `-l/--limit N` (default 20) and `--fts`/`--raw`, which
-reads the query as an FTS5 expression instead of literal text ([search](#search)).
+the default. `discover` and `search` take `-l/--limit N` (default 20); zero lists
+everything, and negative limits are rejected.
+The same limit applies in every format.
+Truncated tables report how many rows are shown and the total found.
+`search` also takes `--fts`/`--raw`, which reads the query as an FTS5 expression instead
+of literal text ([search](#search)).
+
+### Structured output
+
+Put `--format` before the command.
+Use `--limit 0` for a complete discovery or search export:
+
+```console
+$ ebdx --format json discover ~/books --limit 0
+$ ebdx --format jsonl search Herbert --limit 0
+$ ebdx --format csv schema --database ~/library.db
+$ ebdx --dry-run --format json index ~/books
+```
+
+Structured stdout contains only records; progress, errors, truncation notices, and
+dry-run plans go to stderr.
+Values retain their full text, including long paths, quotes, commas, and newlines.
+JSON keeps numbers and nulls; CSV has a header and empty cells for null values.
+Empty listings emit `[]` in JSON, no lines in JSONL, and just the header in CSV.
+
+| Command | Record fields |
+| --- | --- |
+| `discover` | `filename`, `parent`, full resolved `path` |
+| `search` | `id`, `title`, `author`, `series`, `series_index`, `path` |
+| `index` | `total`, `indexed`, `updated`, `skipped`, `failed`, `dry_run` |
+| `schema` | `name`, `type`, `sql` |
+| `about` | `version`, `summary`, `repository`, `data_directory`, `database` |
+| `version` | `version` |
+
+JSON emits arrays for listings and one object for index, about, and version.
+JSONL emits one object per line; indexing emits one summary line.
+Dry-run index summaries contain predicted counts and `dry_run: true`. A dry-run search
+that cannot query an index it would need to repair emits an empty listing and explains
+the pending repair on stderr.
+Dry runs leave the database unchanged.
+
+`ebdx sql` uses its own output options, such as `--csv`, `--nl`, and `--table`. A
+non-table global `--format` with `sql` is a usage error; place its native format options
+after the SQL subcommand instead.
 
 ### sql
 
