@@ -1,16 +1,20 @@
 # cli-runtime Specification
 
 ## Purpose
-The shared behavior of the `ebdx` command line: how much the tool prints while it works, where it puts its database when not told otherwise, and the informational commands that let a user see what version they have and where their data lives.
+
+The shared behavior of the `ebdx` command line: how much the tool prints while it works,
+where it puts its database when not told otherwise, and the informational commands that
+let a user see what version they have and where their data lives.
 
 ## Requirements
 
 ### Requirement: Output is quiet by default and adjustable
 
-The CLI SHALL emit only warnings and errors on the diagnostic stream by default. It SHALL
-accept a verbosity option that raises the level to informational and above, and a quiet
-option that suppresses all but errors. The quiet option SHALL also suppress the progress
-display, which is diagnostic rather than a command result.
+The CLI SHALL emit only warnings and errors on the diagnostic stream by default.
+It SHALL accept a verbosity option that raises the level to informational and above, and
+a quiet option that suppresses all but errors.
+The quiet option SHALL also suppress the progress display, which is diagnostic rather
+than a command result.
 
 #### Scenario: Default run emits no debug chatter
 
@@ -21,18 +25,20 @@ display, which is diagnostic rather than a command result.
 
 - **WHEN** a command is run with the verbose option
 - **THEN** informational log lines, including the database being opened, appear on the
-  diagnostic stream — log detail, which the verbosity options govern independently of the
-  rendered progress display
+  diagnostic stream — log detail, which the verbosity options govern independently of
+  the rendered progress display
 
 #### Scenario: Quiet suppresses warnings
 
 - **WHEN** indexing encounters an unreadable file while the quiet option is set
-- **THEN** no warning line is emitted, and the run's failure count still reflects the file
+- **THEN** no warning line is emitted, and the run’s failure count still reflects the
+  file
 
 #### Scenario: Quiet suppresses the progress display
 
 - **WHEN** `index` or `discover` is run on a terminal with the quiet option set
-- **THEN** no progress display is shown, while the command's own results are still printed
+- **THEN** no progress display is shown, while the command’s own results are still
+  printed
 
 #### Scenario: Command results are not suppressed
 
@@ -41,7 +47,9 @@ display, which is diagnostic rather than a command result.
 
 ### Requirement: Database location resolves consistently
 
-Commands that read or write the library SHALL use the path given by the database option when present, and otherwise a single default path in the user's platform data directory. Only commands that write SHALL create the data directory.
+Commands that read or write the library SHALL use the path given by the database option
+when present, and otherwise a single default path in the user’s platform data directory.
+Only commands that write SHALL create the data directory.
 
 #### Scenario: Explicit path is honoured
 
@@ -50,7 +58,8 @@ Commands that read or write the library SHALL use the path given by the database
 
 #### Scenario: Default path is shared across commands
 
-- **WHEN** `index` is run with no database option and `search` is then run with no database option
+- **WHEN** `index` is run with no database option and `search` is then run with no
+  database option
 - **THEN** both resolve to the same default database file
 
 #### Scenario: Read-only commands do not create directories
@@ -60,7 +69,8 @@ Commands that read or write the library SHALL use the path given by the database
 
 ### Requirement: Informational commands describe the installation
 
-The CLI SHALL provide commands reporting the installed version, and the project summary together with the resolved data directory and default database path.
+The CLI SHALL provide commands reporting the installed version, and the project summary
+together with the resolved data directory and default database path.
 
 #### Scenario: Version is reported
 
@@ -70,7 +80,8 @@ The CLI SHALL provide commands reporting the installed version, and the project 
 #### Scenario: About names the resolved paths
 
 - **WHEN** the about command is run
-- **THEN** the output includes the data directory and default database path that other commands would use
+- **THEN** the output includes the data directory and default database path that other
+  commands would use
 
 #### Scenario: Informational commands need no database
 
@@ -79,7 +90,8 @@ The CLI SHALL provide commands reporting the installed version, and the project 
 
 ### Requirement: Schema inspection reflects the live database
 
-The schema command SHALL list the tables, indexes, and triggers of the resolved database, and SHALL explain how to create one when the file does not exist.
+The schema command SHALL list the tables, indexes, and triggers of the resolved
+database, and SHALL explain how to create one when the file does not exist.
 
 #### Scenario: Schema of an indexed library
 
@@ -94,29 +106,29 @@ The schema command SHALL list the tables, indexes, and triggers of the resolved 
 ### Requirement: A dry run makes no durable change
 
 The CLI SHALL accept a dry-run option that, when set, causes every command to leave the
-data directory, the database file, and the database's contents and schema exactly as it
+data directory, the database file, and the database’s contents and schema exactly as it
 found them. A dry run SHALL exit 0 when nothing went wrong.
 
 #### Scenario: Nothing is created where nothing existed
 
 - **WHEN** `index` is run with the dry-run option and no data directory or database file
   exists at the resolved location
-- **THEN** no data directory is created, no database file is created, and the exit status
-  is 0
+- **THEN** no data directory is created, no database file is created, and the exit
+  status is 0
 
 #### Scenario: An existing library is left byte-for-byte alone
 
-- **WHEN** `index` is run with the dry-run option against a library already indexed into an
-  existing database
-- **THEN** the number of book records, the recorded schema version, and the database file's
-  modification time are unchanged afterwards
+- **WHEN** `index` is run with the dry-run option against a library already indexed into
+  an existing database
+- **THEN** the number of book records, the recorded schema version, and the database
+  file’s modification time are unchanged afterwards
 
 #### Scenario: A read-looking command repairs nothing
 
 - **WHEN** `search` or `schema` is run with the dry-run option against a database whose
   full-text index has been dropped or replaced by an ordinary table
-- **THEN** the set of objects in the database and its recorded schema version are unchanged
-  afterwards, and no index is rebuilt or repopulated
+- **THEN** the set of objects in the database and its recorded schema version are
+  unchanged afterwards, and no index is rebuilt or repopulated
 
 #### Scenario: An out-of-date database is not rebuilt
 
@@ -126,9 +138,9 @@ found them. A dry run SHALL exit 0 when nothing went wrong.
 
 #### Scenario: A migratable database is not migrated
 
-- **WHEN** `index`, `search`, or `schema` is run with the dry-run option against a database
-  recorded at an earlier, migratable schema version
-- **THEN** no migration step is applied, the database's tables, columns, indexes, and
+- **WHEN** `index`, `search`, or `schema` is run with the dry-run option against a
+  database recorded at an earlier, migratable schema version
+- **THEN** no migration step is applied, the database’s tables, columns, indexes, and
   triggers are unchanged, and the recorded schema version is unchanged
 
 #### Scenario: Read-only commands are unaffected
@@ -139,21 +151,22 @@ found them. A dry run SHALL exit 0 when nothing went wrong.
 ### Requirement: A dry run reports what it would have done
 
 Under the dry-run option, a command that would otherwise change state SHALL report the
-changes it would have made rather than silently doing nothing, and SHALL mark its output as
-a dry run so the report cannot be mistaken for a completed run. A command that cannot
-change state has no such report to be mistaken, and SHALL NOT be labelled — its output
-stays byte-identical so it remains usable in a pipeline.
+changes it would have made rather than silently doing nothing, and SHALL mark its output
+as a dry run so the report cannot be mistaken for a completed run.
+A command that cannot change state has no such report to be mistaken, and SHALL NOT be
+labelled — its output stays byte-identical so it remains usable in a pipeline.
 
 #### Scenario: Each file is classified
 
 - **WHEN** `index` is run with the dry-run option over a library where some books are
   already indexed and others are not
-- **THEN** the summary reports how many files would be newly indexed and how many would be
-  updated, using the same counts a real run would produce
+- **THEN** the summary reports how many files would be newly indexed and how many would
+  be updated, using the same counts a real run would produce
 
 #### Scenario: Creation of the store is announced
 
-- **WHEN** `index` is run with the dry-run option and no data directory or database exists
+- **WHEN** `index` is run with the dry-run option and no data directory or database
+  exists
 - **THEN** the output states that the data directory, the database file, and the schema
   would be created
 
@@ -167,18 +180,19 @@ stays byte-identical so it remains usable in a pipeline.
 
 A dry run SHALL report the counts a real run would produce for any database this tool
 wrote — at the current layout, at an earlier one it migrates in place, or at an earlier
-one it knows how to rebuild. It SHALL NOT
-attempt to predict the outcome for a layout it does not recognise, since doing so would
-require reproducing the whole of the schema-setup and write paths and would drift from
-them. Such a database SHALL instead be reported as unusable, naming what is wrong and
+one it knows how to rebuild.
+It SHALL NOT attempt to predict the outcome for a layout it does not recognise, since
+doing so would require reproducing the whole of the schema-setup and write paths and
+would drift from them.
+Such a database SHALL instead be reported as unusable, naming what is wrong and
 directing the user to rebuild it, and the command SHALL exit non-zero.
 
-Recognition SHALL be structural — the tables, their columns, and the indexes and triggers
-that are expected to exist at the schema version the database records, so that an earlier
-layout lacking only what later versions add is recognised rather than rejected. It SHALL
-NOT extend to the definitions of those objects, since
-comparing them means comparing stored SQL text against the text this build happens to emit,
-and a database altered to keep an object's name while changing its body is indistinguishable
+Recognition SHALL be structural — the tables, their columns, and the indexes and
+triggers that are expected to exist at the schema version the database records, so that
+an earlier layout lacking only what later versions add is recognised rather than
+rejected. It SHALL NOT extend to the definitions of those objects, since comparing them
+means comparing stored SQL text against the text this build happens to emit, and a
+database altered to keep an object’s name while changing its body is indistinguishable
 from a healthy one by any cheaper means.
 
 #### Scenario: A current library is predicted exactly
@@ -196,7 +210,8 @@ from a healthy one by any cheaper means.
 
 - **WHEN** `search` is run with the dry-run option against a database recorded at an
   earlier layout, whose stored rows a real run would discard while rebuilding
-- **THEN** no results are shown, and the output says the library must be re-indexed first
+- **THEN** no results are shown, and the output says the library must be re-indexed
+  first
 
 #### Scenario: A migratable earlier layout is predicted exactly
 
@@ -208,10 +223,10 @@ from a healthy one by any cheaper means.
 
 #### Scenario: A partial migratable layout names pending migrations
 
-- **WHEN** `schema` is run with the dry-run option against a migratable database without a
-  `books` table
-- **THEN** the output reports creation of the core schema and names each pending migration
-  without changing the database
+- **WHEN** `schema` is run with the dry-run option against a migratable database without
+  a `books` table
+- **THEN** the output reports creation of the core schema and names each pending
+  migration without changing the database
 
 #### Scenario: A migration keeps stored rows visible
 
@@ -237,35 +252,35 @@ from a healthy one by any cheaper means.
 
 #### Scenario: An unrecognised layout is reported, not predicted
 
-- **WHEN** `index` is run with the dry-run option against a database whose tables are not
-  the ones this tool writes
-- **THEN** no counts are reported, the output names what is wrong, it directs the user to
-  rebuild the database, and the exit status is non-zero
+- **WHEN** `index` is run with the dry-run option against a database whose tables are
+  not the ones this tool writes
+- **THEN** no counts are reported, the output names what is wrong, it directs the user
+  to rebuild the database, and the exit status is non-zero
 
 #### Scenario: An unrecognised layout is reported by a reading command too
 
-- **WHEN** `search` is run with the dry-run option against a database whose tables are not
-  the ones this tool writes
+- **WHEN** `search` is run with the dry-run option against a database whose tables are
+  not the ones this tool writes
 - **THEN** the database is reported as unusable, naming what is wrong and directing the
   user to rebuild it, and the exit status is non-zero — whatever the query says, and
   whatever the real command would have failed on first
 
 #### Scenario: Output is labelled
 
-- **WHEN** a command that would otherwise create or modify the data directory, the database
-  file, or its contents is run with the dry-run option
+- **WHEN** a command that would otherwise create or modify the data directory, the
+  database file, or its contents is run with the dry-run option
 - **THEN** the output identifies the run as a dry run
 
 #### Scenario: Commands with nothing to suppress are not labelled
 
 - **WHEN** a command that cannot change state is run with the dry-run option
-- **THEN** no dry-run label is added and its output is byte-identical to the same command
-  run without the option
+- **THEN** no dry-run label is added and its output is byte-identical to the same
+  command run without the option
 
 ### Requirement: The dry-run option is given before the command
 
-The dry-run option SHALL be accepted in the same position as the verbosity options — before
-the subcommand — and the help text SHALL make that ordering discoverable.
+The dry-run option SHALL be accepted in the same position as the verbosity options —
+before the subcommand — and the help text SHALL make that ordering discoverable.
 
 #### Scenario: Group position is accepted
 
@@ -279,12 +294,12 @@ the subcommand — and the help text SHALL make that ordering discoverable.
 
 ### Requirement: Long-running commands show progress on the diagnostic stream
 
-Commands that walk a library or read every file in one SHALL show a live progress display
-while they work, so a long run is distinguishable from a hung one. The display is
-diagnostic, not a result: it SHALL be written to the diagnostic stream, never to the
-stream that carries command results, and it SHALL share a console with log records so that
-a record emitted while the display is live is shown in full and the display is redrawn
-after it.
+Commands that walk a library or read every file in one SHALL show a live progress
+display while they work, so a long run is distinguishable from a hung one.
+The display is diagnostic, not a result: it SHALL be written to the diagnostic stream,
+never to the stream that carries command results, and it SHALL share a console with log
+records so that a record emitted while the display is live is shown in full and the
+display is redrawn after it.
 
 The display SHALL report a determinate position — how many of a known total are done —
 once the set of files to process is known, and SHALL report an indeterminate, advancing
@@ -300,7 +315,8 @@ cannot be known until the walk ends.
 #### Scenario: Discovery reports its position
 
 - **WHEN** `discover` is run over a library on a terminal
-- **THEN** a display appears while the directory is walked and while the listing is built
+- **THEN** a display appears while the directory is walked and while the listing is
+  built
 
 #### Scenario: A walk with no known total still shows activity
 
@@ -312,7 +328,7 @@ cannot be known until the walk ends.
 #### Scenario: A warning during the display stays readable
 
 - **WHEN** indexing encounters an unreadable file while the display is live
-- **THEN** the warning is emitted in full on its own line, the run's failure count still
+- **THEN** the warning is emitted in full on its own line, the run’s failure count still
   reflects the file, and the display continues afterwards
 
 #### Scenario: Results are not disturbed
@@ -324,34 +340,36 @@ cannot be known until the walk ends.
 #### Scenario: A dry run shows the same display
 
 - **WHEN** `index` is run with the dry-run option over a library on a terminal
-- **THEN** the same display appears, because the same walk and the same extraction pass are
-  performed, and the dry-run label and summary are unchanged
+- **THEN** the same display appears, because the same walk and the same extraction pass
+  are performed, and the dry-run label and summary are unchanged
 
 ### Requirement: The progress display never reaches a redirected stream
 
-A progress display SHALL be shown only when the diagnostic stream is a terminal. When that
-stream is redirected to a file or a pipe, no display, partial frame, or terminal control
-sequence SHALL be written, and the stream carrying command results SHALL be unaffected in
-every case.
+A progress display SHALL be shown only when the diagnostic stream is a terminal.
+When that stream is redirected to a file or a pipe, no display, partial frame, or
+terminal control sequence SHALL be written, and the stream carrying command results
+SHALL be unaffected in every case.
 
 #### Scenario: A piped run stays clean
 
 - **WHEN** `index` or `discover` is run with its output redirected to a file
-- **THEN** the file contains the command's ordinary output and no progress frames or
+- **THEN** the file contains the command’s ordinary output and no progress frames or
   cursor-control sequences
 
 #### Scenario: Results are unchanged by the display
 
-- **WHEN** a command that shows a display is run with its diagnostic stream on a terminal
-  and again with that stream redirected, its result stream redirected in both runs
+- **WHEN** a command that shows a display is run with its diagnostic stream on a
+  terminal and again with that stream redirected, its result stream redirected in both
+  runs
 - **THEN** the result output is byte-identical between the two runs
 
 ### Requirement: Index results identify unchanged files that were skipped
 
 The `index` command SHALL report the number of discovered files that were skipped
 because their saved size, modification time, and content hash matched the file facts
-observed before metadata extraction. The result SHALL continue to distinguish newly indexed
-files, updated files, and failures from skipped files.
+observed before metadata extraction.
+The result SHALL continue to distinguish newly indexed files, updated files, and
+failures from skipped files.
 
 #### Scenario: An unchanged second run reports skips
 
@@ -369,13 +387,106 @@ files, updated files, and failures from skipped files.
 
 #### Scenario: A failed file is distinct from a skipped file
 
-- **WHEN** the index command cannot read or extract metadata from one EPUB, cannot
-  store it, or finds that it changed while being read
+- **WHEN** the index command cannot read or extract metadata from one EPUB, cannot store
+  it, or finds that it changed while being read
 - **THEN** that file is counted as failed and is not included in the skipped count
 
 #### Scenario: A file without a content hash is never skipped
 
-- **WHEN** an EPUB's metadata can be extracted and stored but its content hash cannot be
+- **WHEN** an EPUB’s metadata can be extracted and stored but its content hash cannot be
   computed
 - **THEN** it is reported as indexed or updated rather than failed, and every later run
   refreshes it rather than reporting it as skipped
+
+### Requirement: The CLI provides read-only SQLite inspection commands
+
+The CLI SHALL provide an `sql` command group with a `--database/-d` option that defaults
+to the same database path used by the other database commands.
+The option SHALL be accepted either before the SQL subcommand or on the subcommand
+itself; a subcommand-level value SHALL take precedence.
+The group SHALL expose read-only sqlite-utils-compatible commands for `query`, `tables`,
+`views`, `schema`, `rows`, `indexes`, `triggers`, `dump`, `search`, and
+`analyze-tables`. It SHALL support the shared output options `--nl`, `--arrays`,
+`--csv`, `--tsv`, `--no-headers`, `-t/--table`, `--fmt`, and `--json-cols`, plus
+`--load-extension` where sqlite-utils supports it.
+`search` SHALL provide sqlite-utils' full-text search options for the selected table.
+`analyze-tables` SHALL provide its read-only analysis options but SHALL NOT expose
+sqlite-utils' `--save` option.
+
+The group SHALL NOT expose sqlite-utils' `memory` or `plugins` commands: `memory` works
+on a separate in-memory import database, and `plugins` reports installed environment
+extensions rather than inspecting the selected library database.
+
+#### Scenario: SQL inspection uses the default database
+
+- **WHEN** `ebdx sql tables` is run without `--database` after a library has been
+  indexed
+- **THEN** it lists the tables in ebdx’s default database, including `books` and
+  `books_fts`
+
+#### Scenario: SQL inspection uses an explicit database
+
+- **WHEN** `ebdx sql schema --database library.db` is run
+- **THEN** it reads `library.db` and does not read or create the default database
+
+#### Scenario: Query output supports sqlite-utils formats
+
+- **WHEN** `ebdx sql query --csv --database library.db "select title from books"` is run
+- **THEN** stdout is valid CSV produced from the query result
+
+#### Scenario: SQL search uses the selected table’s FTS index
+
+- **WHEN** `ebdx sql search books dune` is run against an indexed library
+- **THEN** it returns matching book rows using sqlite-utils output formatting
+
+#### Scenario: SQL search can quote a raw term
+
+- **WHEN** `ebdx sql search --quote books "science fiction"` is run
+- **THEN** the search term is passed through sqlite-utils' FTS quoting rules
+
+#### Scenario: Table analysis does not save results
+
+- **WHEN** `ebdx sql analyze-tables books` is run
+- **THEN** it reports column analysis and the database has no `_analyze_tables` table
+
+#### Scenario: Excluded commands are absent
+
+- **WHEN** `ebdx sql --help` is run
+- **THEN** `memory` and `plugins` are not listed as subcommands
+
+### Requirement: SQL inspection is read-only
+
+Every `ebdx sql` command SHALL open the selected database read-only and SHALL refuse any
+SQL write. A failed write SHALL leave the selected database unchanged.
+The protection SHALL also cover a query that attaches another database and then attempts
+to write to it.
+
+#### Scenario: A write query is refused
+
+- **WHEN** `ebdx sql query --database library.db "delete from books"` is run
+- **THEN** it exits non-zero, reports the SQLite write failure, and the rows in `books`
+  are unchanged
+
+#### Scenario: An attached write is refused
+
+- **WHEN** a query attaches another database and then attempts to write to it
+- **THEN** it exits non-zero and neither database is modified
+
+### Requirement: SQL inspection does not create or traceback on bad paths
+
+The `sql` group SHALL not create a database file when the selected path does not exist.
+It SHALL report the missing path and direct the user to `ebdx index <directory>`. A path
+that exists but is not a usable SQLite database SHALL be reported through the CLI’s
+normal unusable-database error without a traceback.
+
+#### Scenario: Missing database
+
+- **WHEN** `ebdx sql tables --database missing.db` is run
+- **THEN** it exits non-zero, says no database was found, suggests `ebdx index`, and
+  leaves `missing.db` absent
+
+#### Scenario: Non-SQLite file
+
+- **WHEN** `ebdx sql schema --database not-a-database.db` is run against a non-SQLite
+  file
+- **THEN** it exits non-zero with a friendly unusable-database message and no traceback

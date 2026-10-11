@@ -16,6 +16,7 @@ from platformdirs import user_data_dir
 from rich.console import Console
 
 from ebdx.progress import file_progress, log_sink, short_name, walk_progress
+from ebdx.sql import sql as sql_group
 
 APP_NAME = "ebdx"
 APP_AUTHOR = "crossjam"
@@ -612,8 +613,8 @@ def schema(ctx: click.Context, database):
         "ORDER BY type, name"
     ).fetchall()
 
-    for name, typ, sql in results:
-        table.add_row(name, typ, sql or "")
+    for name, typ, sql_text in results:
+        table.add_row(name, typ, sql_text or "")
 
     console.print(table)
 
@@ -646,6 +647,9 @@ def about():
 def version():
     """Display the ebdx version."""
     console.print(f"ebdx, version {_get_pkg_version()}")
+
+
+cli.add_command(sql_group)
 
 
 def main():

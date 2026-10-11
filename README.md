@@ -81,6 +81,7 @@ A file that cannot be read is counted under `Failed` and the run continues.
 | `ebdx index ROOT` | Scan `ROOT` recursively, extract metadata, and store it |
 | `ebdx search QUERY` | Full-text search over indexed metadata (literal text; `--fts` for FTS5 syntax) |
 | `ebdx schema` | Print the tables, indexes, and triggers in the database |
+| `ebdx sql COMMAND` | Run a read-only sqlite-utils inspection command against the database |
 | `ebdx about` | Show version, summary, and where data is stored |
 | `ebdx version` | Print the version |
 
@@ -96,6 +97,32 @@ Command results are printed regardless.
 `index`, `search`, and `schema` accept `-d/--database PATH` to use a database other than
 the default. `search` also takes `-l/--limit N` (default 20) and `--fts`/`--raw`, which
 reads the query as an FTS5 expression instead of literal text ([search](#search)).
+
+### sql
+
+`ebdx sql` exposes the read-only sqlite-utils inspection commands `query`, `tables`,
+`views`, `schema`, `rows`, `indexes`, `triggers`, `dump`, `search`, and
+`analyze-tables`. The database option can be placed on the group or after the SQL
+subcommand:
+
+```console
+$ ebdx sql --database ~/library.db tables --counts
+$ ebdx sql --database ~/library.db query --csv "select title, path from books"
+$ ebdx sql query --csv --database ~/library.db "select title, path from books"
+$ ebdx sql search --csv books Dune
+$ ebdx sql analyze-tables books
+```
+
+The group opens the database through SQLite’s read-only mode and rejects writes,
+including writes to an attached database.
+`ebdx schema` remains the friendly Rich view; `ebdx sql schema` is the raw
+sqlite-utils-compatible schema output.
+A missing database is not created — run `ebdx index <directory>` first.
+`search` is the raw sqlite-utils FTS form and takes the content table, such as `books`;
+the top-level `ebdx search` remains the friendly literal-by-default command.
+`analyze-tables` never saves its results.
+The unrelated sqlite-utils `memory` and `plugins` commands are intentionally not exposed
+here.
 
 ### discover
 
