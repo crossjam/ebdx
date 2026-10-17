@@ -6,6 +6,9 @@ does not read Calibre's ``calibre:series`` meta) rather than the value a
 fix would produce; that fix is out of scope for this change.
 """
 
+import pytest
+from ebooklib import epub
+
 from ebdx.extractor import extract_metadata
 
 TEXT_FIELDS = ("title", "author", "series", "publisher", "published", "isbn", "language", "tags")
@@ -87,3 +90,23 @@ def test_corrupt_file_returns_none(make_corrupt_epub):
 
 def test_missing_file_returns_none(tmp_path):
     assert extract_metadata(tmp_path / "does-not-exist.epub") is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("nan", None), ("NaN", None), ("Infinity", None), ("-Infinity", None), ("2.5", 2.5)],
+)
+def test_non_finite_series_index_is_dropped(make_epub, monkeypatch, raw, expected):
+    original = epub.EpubBook.get_metadata
+
+    def get_metadata(self, namespace, name):
+        if (namespace, name) == ("OPF", "series_index"):
+            return [(raw, {})]
+        return original(self, namespace, name)
+
+    monkeypatch.setattr(epub.EpubBook, "get_metadata", get_metadata)
+
+    md = extract_metadata(make_epub("x.epub", title="X"))
+
+    assert md is not None
+    assert md["series_index"] == expected

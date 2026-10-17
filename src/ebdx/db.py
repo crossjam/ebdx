@@ -909,6 +909,10 @@ def search_books(
     """
     if limit is None:
         limit = 20
+    elif limit == 0:
+        limit = -1  # SQLite's unlimited sentinel.
+    elif limit < 0:
+        raise ValueError("limit must be non-negative")
 
     # Settle the query before touching the real database, so the statement
     # below can only fail for database reasons. The resolved form is what runs:
@@ -949,6 +953,19 @@ def search_books(
         )
 
     return books
+
+
+def count_search_books(db: "Database", query: str, *, fts: bool = False) -> int:
+    """Count matches using the same joins and query semantics as search_books."""
+    query = resolve_query(query, fts=fts)
+    if not query:
+        return 0
+    return db.execute(
+        "SELECT count(*) FROM books_fts "
+        "JOIN books b ON books_fts.rowid = b.id "
+        "JOIN authors a ON b.author_id = a.id WHERE books_fts MATCH ?",
+        (query,),
+    ).fetchone()[0]
 
 
 # File-statistics migration.
