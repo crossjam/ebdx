@@ -4,6 +4,7 @@ EPUB metadata extraction module for ebdx.
 Extracts metadata from .epub files using ebooklib.
 """
 
+import math
 from contextlib import suppress
 from pathlib import Path
 
@@ -47,7 +48,9 @@ def extract_metadata(epub_path: Path) -> dict | None:
         series_num_meta = book.get_metadata("OPF", "series_index")
         if series_num_meta:
             with suppress(ValueError, TypeError):
-                series_index = float(series_num_meta[0][0])
+                parsed = float(series_num_meta[0][0])
+                if math.isfinite(parsed):
+                    series_index = parsed
 
         publisher_meta = book.get_metadata("DC", "publisher")
         publisher = _text(publisher_meta[0][0]) if publisher_meta else ""

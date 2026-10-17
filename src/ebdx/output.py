@@ -3,6 +3,7 @@
 import csv
 import io
 import json
+import math
 from dataclasses import dataclass
 
 import click
@@ -49,13 +50,14 @@ class Listing:
 
 def emit(records: list[dict], fields: tuple[str, ...], *, single: bool = False) -> None:
     """Write complete records without Rich markup, wrapping, or truncation."""
-    records = [{key: row.get(key) for key in fields} for row in records]
+    records = [{key: _finite(row.get(key)) for key in fields} for row in records]
     fmt = output_format()
     if fmt == "json":
-        click.echo(json.dumps(records[0] if single else records, ensure_ascii=False))
+        payload = records[0] if single else records
+        click.echo(json.dumps(payload, ensure_ascii=False, allow_nan=False))
     elif fmt == "jsonl":
         for row in records:
-            click.echo(json.dumps(row, ensure_ascii=False))
+            click.echo(json.dumps(row, ensure_ascii=False, allow_nan=False))
     elif fmt == "csv":
         ctx = click.get_current_context()
         if (ctx.find_object(dict) or {}).get("safe_csv", True):
@@ -67,6 +69,11 @@ def emit(records: list[dict], fields: tuple[str, ...], *, single: bool = False) 
         writer.writeheader()
         writer.writerows(records)
         click.echo(buffer.getvalue(), nl=False)
+
+
+def _finite(value):
+    """Map NaN/Infinity to null so JSON output stays standards-compliant."""
+    return None if isinstance(value, float) and not math.isfinite(value) else value
 
 
 def _spreadsheet_cell(value):

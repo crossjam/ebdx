@@ -34,7 +34,7 @@
 - [x] 3.3 Record verification evidence on both Kata issues and close only when their
   acceptance criteria are complete.
 
-Verification: `uv run poe qa` passed lint, type checks, and all 333 tests.
+Verification: `uv run poe qa` passed lint, type checks, and all 357 tests.
 `uv run ruff format --check src/ tests/`, `git diff --check`, and strict OpenSpec
 validation passed. Both Kata issues are closed with evidence.
 Implementation is on `feat/listing-limits-and-output-formats`.
