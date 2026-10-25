@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "CLI tool to index EPUB metadata into a SQLite database"
 readme = "README.md"
 requires-python = ">=3.13"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 dependencies = [
     "click>=8.1",
     "loguru>=0.7",
