@@ -498,7 +498,14 @@ and `csv`, defaulting to `table`. Discovery, search, indexing summaries, schema,
 and version SHALL support these formats.
 Structured stdout SHALL contain only the payload, with complete field values.
 Diagnostics and dry-run explanations SHALL go to stderr.
-Errors SHALL exit non-zero.
+Errors SHALL exit non-zero, except that `schema` in table format reports a missing
+database as an informational message and exits successfully.
+
+#### Scenario: Schema without a database in structured formats
+
+- **WHEN** `schema` is run with a structured format and no database exists at the
+  resolved path
+- **THEN** it exits non-zero, because there is no payload to emit
 
 #### Scenario: Structured output round-trips
 
